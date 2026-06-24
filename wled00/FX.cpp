@@ -8559,6 +8559,103 @@ uint16_t mode_2DGEQ(void) { // By Will Tatam. Code reduction by Ewoud Wijma. Fla
 } // mode_2DGEQ()
 static const char _data_FX_MODE_2DGEQ[] PROGMEM = "GEQ ☾@Fade speed,Ripple decay,# of bands,,,Color bars,Smooth bars ☾;!,,Peaks;!;12f;c1=255,c2=64,pal=11,si=0"; // Beatsin
 
+///////////////////////
+//   2D Equalizer LF  //   nowplaying: on-chip port of LedFx "Equalizer2d" (bars)
+///////////////////////
+// Reproduces LedFx ledfx/effects/equalizer2d.py draw_normal: smooth mel bars
+// (per-band exp filter, fast rise / slow decay = the anti-flicker WLED's GEQ
+// lacks), four color modes (Off/Solid/Progressive/Stretch), and slow-falling
+// peak-hold markers. Fed by AudioReactive fftResult[16], interpolated to N bands.
+// Sliders: Bar decay, Peak decay, Bands, Roll, Color mode; checks: Center, Peaks.
+uint16_t mode_2DEqualizerLF(void) {
+  if (!SEGMENT.is2D()) return mode_static(); // 2D only (our HUB75 panel)
+  const int cols = SEGMENT.virtualWidth();
+  const int rows = SEGMENT.virtualHeight();
+  if ((cols < 2) || (rows < 2)) return mode_static();
+
+  const int bands = constrain((int)map2(SEGMENT.custom1, 0, 255, 1, 64), 1, 64); // # freq bands
+  const int colorMode = map2(SEGMENT.custom3, 0, 31, 0, 3); // 0=Off 1=Solid 2=Progressive 3=Stretch (custom3 is 5-bit)
+  const bool center = SEGMENT.check1;
+  const bool peaks  = SEGMENT.check2;
+
+  // per-band persistent state: [0..bands) smoothed level, [bands..2*bands) peak level (0..1 floats)
+  if (!SEGENV.allocateData(sizeof(float) * 2 * bands)) return mode_static();
+  float *barLvl  = reinterpret_cast<float*>(SEGENV.data);
+  float *peakLvl = barLvl + bands;
+  if (SEGENV.call == 0) { for (int i = 0; i < 2*bands; i++) barLvl[i] = 0.0f; SEGMENT.setUpLeds(); }
+
+  um_data_t *um_data = getAudioData();
+  uint8_t fftResult[NUM_GEQ_CHANNELS] = {0};
+  if (um_data->u_data != nullptr) memcpy(fftResult, um_data->u_data[2], sizeof(fftResult));
+
+  // LedFx ExpFilter feel: smooth attack (Rise slider) + slower decay.
+  // The squelch gate opens binary (fftResult snaps 0 -> full), so a near-instant
+  // rise made the low bands "pop" violently. A gentle attack ramps them up over a
+  // few frames instead. Low Rise = smoothest; high = snappy.
+  const float riseAlpha = (float)map2(SEGMENT.custom2,   0, 255, 5, 50) / 100.0f; // attack (Rise slider)
+  const float barDecay  = (float)map2(SEGMENT.speed,     0, 255, 6, 55) / 100.0f; // bar fall rate (Bar decay slider)
+  const float peakDecay = (float)map2(SEGMENT.intensity, 0, 255, 2, 18) / 100.0f; // peak fall rate (slow)
+
+  SEGMENT.fill(BLACK);
+  const uint32_t peakColor = (SEGCOLOR(2) != BLACK) ? SEGCOLOR(2) : (uint32_t)WHITE;
+
+  for (int b = 0; b < bands; b++) {
+    // sample the 16-band fftResult at this band, linearly interpolated to N bands
+    float fpos = (bands > 1) ? (float)b * 15.0f / (float)(bands - 1) : 0.0f;
+    int i0 = (int)fpos; int i1 = (i0 < 15) ? i0 + 1 : 15;
+    float frac = fpos - (float)i0;
+    float raw = (fftResult[i0] * (1.0f - frac) + fftResult[i1] * frac) / 255.0f; // 0..1
+
+    // per-band smoothing (fast rise / slow decay)
+    float cur = barLvl[b];
+    cur = (raw > cur) ? (riseAlpha * raw + (1.0f - riseAlpha) * cur)
+                      : (barDecay  * raw + (1.0f - barDecay)  * cur);
+    barLvl[b] = cur;
+    // peak follows up instantly, falls slowly
+    float pk = peakLvl[b];
+    pk = (cur > pk) ? cur : (peakDecay * cur + (1.0f - peakDecay) * pk);
+    peakLvl[b] = pk;
+
+    int barH = (int)(cur * rows + 0.5f); if (barH > rows) barH = rows;
+    int x0 = (b * cols) / bands;
+    int x1 = ((b + 1) * cols) / bands - 1; if (x1 < x0) x1 = x0;
+
+    // per-band base color index (Off = spread by band, Solid = by level)
+    uint8_t bandIdx = (bands > 1) ? (uint8_t)((b * 255) / (bands - 1)) : 0;
+    uint8_t lvlIdx  = (uint8_t)(constrain(cur, 0.0f, 1.0f) * 255.0f);
+
+    for (int x = x0; x <= x1 && x < cols; x++) {
+      for (int yy = 0; yy < barH; yy++) {
+        int y = center ? (rows/2 - barH/2 + yy) : (rows - 1 - yy); // fill up from bottom / out from center
+        if (y < 0 || y >= rows) continue;
+        uint8_t idx;
+        switch (colorMode) {
+          case 1:  idx = lvlIdx; break;                                    // Solid: color by level
+          case 2:  idx = (uint8_t)((uint32_t)yy * 255 / (rows > 1 ? rows : 1)); break;      // Progressive: over full height
+          case 3:  idx = (uint8_t)((uint32_t)yy * 255 / (barH > 1 ? barH : 1)); break;      // Stretch: within this bar
+          default: idx = bandIdx; break;                                   // Off: by band
+        }
+        SEGMENT.setPixelColorXY(x, y, SEGMENT.color_from_palette(idx, false, PALETTE_SOLID_WRAP, 0));
+      }
+      if (peaks) {
+        int pkH = (int)(pk * rows + 0.5f); if (pkH > rows) pkH = rows;
+        if (pkH > 0) {
+          if (center) {
+            int yt = rows/2 - pkH/2; int yb = rows/2 + pkH/2 - 1;
+            if (yt >= 0 && yt < rows) SEGMENT.setPixelColorXY(x, yt, peakColor);
+            if (yb >= 0 && yb < rows) SEGMENT.setPixelColorXY(x, yb, peakColor);
+          } else {
+            int y = rows - pkH; if (y < 0) y = 0;
+            SEGMENT.setPixelColorXY(x, y, peakColor);
+          }
+        }
+      }
+    }
+  }
+  return FRAMETIME;
+} // mode_2DEqualizerLF()
+static const char _data_FX_MODE_2DEQUALIZERLF[] PROGMEM = "Equalizer LF ☾@Bar decay,Peak decay,Bands,Rise,Color mode,Center,Peaks;,,Peak;!;2f;c1=64,c2=48,c3=0,o1=0,o2=0,pal=11,si=0";
+
 
 /////////////////////////
 //  ** 2D Funky plank  //
@@ -12230,6 +12327,7 @@ void WS2812FX::setupEffectData() {
   addEffect(FX_MODE_RUNNING_COLOR, &mode_running_color, _data_FX_MODE_RUNNING_COLOR);
   addEffect(FX_MODE_AURORA, &mode_aurora, _data_FX_MODE_AURORA);
   addEffect(FX_MODE_COLORCLOUDS, &mode_ColorClouds, _data_FX_MODE_COLORCLOUDS);
+  addEffect(FX_MODE_2DEQUALIZERLF, &mode_2DEqualizerLF, _data_FX_MODE_2DEQUALIZERLF); // nowplaying: on-chip LedFx Equalizer2d
   addEffect(FX_MODE_RUNNING_RANDOM, &mode_running_random, _data_FX_MODE_RUNNING_RANDOM);
   addEffect(FX_MODE_LARSON_SCANNER, &mode_larson_scanner, _data_FX_MODE_LARSON_SCANNER);
   addEffect(FX_MODE_COMET, &mode_comet, _data_FX_MODE_COMET);

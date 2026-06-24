@@ -803,6 +803,15 @@ BusHub75Matrix::BusHub75Matrix(BusConfig &bc) : Bus(bc.type, bc.start, bc.autoWh
   // HUB75_I2S_CFG::i2s_pins _pins={R1_PIN, G1_PIN, B1_PIN, R2_PIN, G2_PIN, B2_PIN, A_PIN, B_PIN, C_PIN, D_PIN, E_PIN, LAT_PIN, OE_PIN, CLK_PIN};
   mxconfig.gpio = { 1, 5, 6, 7, 13, 9, 16, 48, 47, 21, 38, 8, 4, 18 };
 
+  #elif defined(SECTION9_2_PINOUT)
+  // nowplaying appliance Board 1 (ESP32-S3-N16R8) — docs/esp32-appliance-design.md §9.2.
+  // Bench-verified 2026-06-23 (firmware/board1-smoketest panel_test.cpp, clkphase=false).
+  // E is unconnected on the 64x32 (1/16-scan) panel.
+  USER_PRINTLN("MatrixPanel_I2S_DMA - S3 with PSRAM, nowplaying SECTION9_2 pinout");
+
+  // HUB75_I2S_CFG::i2s_pins _pins={R1_PIN, G1_PIN, B1_PIN, R2_PIN, G2_PIN, B2_PIN, A_PIN, B_PIN, C_PIN, D_PIN, E_PIN, LAT_PIN, OE_PIN, CLK_PIN};
+  mxconfig.gpio = { 4, 5, 6, 7, 15, 16, 8, 9, 10, 11, -1, 13, 14, 21 };
+
   #else
   USER_PRINTLN("MatrixPanel_I2S_DMA - S3 with PSRAM");
 

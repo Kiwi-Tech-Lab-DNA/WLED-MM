@@ -400,7 +400,8 @@ static uint8_t strip_getPaletteBlend();  // forward declaration: little helper t
 #define FX_MODE_PARTICLEGALAXY         228
 
 #define FX_MODE_COLORCLOUDS            229
-#define MODE_COUNT                     230
+#define FX_MODE_2DEQUALIZERLF          230 // nowplaying: on-chip LedFx Equalizer2d port
+#define MODE_COUNT                     231
 
 typedef enum mapping1D2D {
   M12_Pixels = 0,
