@@ -317,6 +317,7 @@ void Segment::resetIfRequired() {
     if (isActive() && !freeze) { fill(BLACK); needsBlank = false; } // WLEDMM start clean
     #ifdef WLED_ENABLE_GIF
     endImagePlayback(this);
+    endKeybeatPlayback(this);
     #endif
     DEBUG_PRINTLN("Segment reset");
   } else if (needsBlank) {
@@ -564,6 +565,7 @@ void Segment::setUp(uint16_t i1, uint16_t i2, uint8_t grp, uint8_t spc, uint16_t
   if (i2 <= i1) { //disable segment
     #ifdef WLED_ENABLE_GIF
     endImagePlayback(this);
+    endKeybeatPlayback(this);
     #endif
     stop = 0;
     markForReset();

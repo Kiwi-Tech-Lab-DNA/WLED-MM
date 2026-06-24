@@ -19,6 +19,7 @@ bool strip_uses_global_leds(void) __attribute__((pure));  // WLEDMM implemented 
 #ifdef WLED_ENABLE_GIF
 struct Segment;                                 // forward declaration
 void endImagePlayback(Segment *seg);            // implemented in image_loader.cpp
+void endKeybeatPlayback(Segment *seg);          // nowplaying: implemented in keybeat_loader.cpp
 #endif
 
 #define FASTLED_INTERNAL //remove annoying pragma messages
@@ -401,7 +402,8 @@ static uint8_t strip_getPaletteBlend();  // forward declaration: little helper t
 
 #define FX_MODE_COLORCLOUDS            229
 #define FX_MODE_2DEQUALIZERLF          230 // nowplaying: on-chip LedFx Equalizer2d port
-#define MODE_COUNT                     231
+#define FX_MODE_KEYBEAT2D              231 // nowplaying: on-chip LedFx Keybeat2d port (beat-synced GIF)
+#define MODE_COUNT                     232
 
 typedef enum mapping1D2D {
   M12_Pixels = 0,
@@ -611,6 +613,7 @@ typedef struct Segment {
       #endif
       #ifdef WLED_ENABLE_GIF
       endImagePlayback(this);
+      endKeybeatPlayback(this);
       #endif
 
       if ((Segment::_globalLeds == nullptr) && !strip_uses_global_leds() && (ledsrgb != nullptr)) {d_free(ledsrgb); ledsrgb = nullptr;}  // WLEDMM we need "!strip_uses_global_leds()" to avoid crashes (#104)

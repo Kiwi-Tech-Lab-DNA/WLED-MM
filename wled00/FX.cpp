@@ -4713,6 +4713,28 @@ uint16_t mode_image(void) {
 static const char _data_FX_MODE_IMAGE[] PROGMEM = "Image@!,Blur,;;;12;sx=128,ix=0";
 
 /*
+  Keybeat 2D effect (nowplaying)
+  On-chip port of LedFx Keybeat2d: plays a GIF (named by the segment name, like the
+  Image effect) with its key frames locked to the music's beat. Beat data + ping-pong
+  flag come from a sidecar "/<name>.kb"; frames are pre-decoded to PSRAM on load.
+  The "Auto" checkbox injects a test beat so the animation runs without audio.
+*/
+uint16_t mode_keybeat2d(void) {
+  if (!strip.isMatrix) return mode_oops(); // 2D only
+  #ifndef WLED_ENABLE_GIF
+  return mode_oops();
+  #else
+  if (max(SEGMENT.virtualWidth(), SEGMENT.virtualHeight()) < 4) return mode_oops();
+  um_data_t *um_data = getAudioData();
+  uint8_t samplePeak  = *(uint8_t*)um_data->u_data[3];
+  float   volumeSmth  = *(float*)  um_data->u_data[0];
+  renderKeybeatToSegment(SEGMENT, samplePeak, volumeSmth);
+  return FRAMETIME;
+  #endif
+}
+static const char _data_FX_MODE_KEYBEAT2D[] PROGMEM = "Keybeat 2D ☾@Speed,,,,,Auto;;;2;sx=128,o1=0,si=0";
+
+/*
   Blends random colors across palette
   Modified, originally by Mark Kriegsman https://gist.github.com/kriegsman/1f7ccbbfa492a73c015e
 */
@@ -12345,6 +12367,7 @@ void WS2812FX::setupEffectData() {
   addEffect(FX_MODE_RUNNING_DUAL, &mode_running_dual, _data_FX_MODE_RUNNING_DUAL);
   #ifdef WLED_ENABLE_GIF
   addEffect(FX_MODE_IMAGE, &mode_image, _data_FX_MODE_IMAGE);
+  addEffect(FX_MODE_KEYBEAT2D, &mode_keybeat2d, _data_FX_MODE_KEYBEAT2D); // nowplaying: on-chip LedFx Keybeat2d
   #endif
   addEffect(FX_MODE_TRICOLOR_CHASE, &mode_tricolor_chase, _data_FX_MODE_TRICOLOR_CHASE);
   addEffect(FX_MODE_TRICOLOR_WIPE, &mode_tricolor_wipe, _data_FX_MODE_TRICOLOR_WIPE);

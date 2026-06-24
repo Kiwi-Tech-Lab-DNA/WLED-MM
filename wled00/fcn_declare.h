@@ -163,6 +163,8 @@ int fileReadBlockCallback(void * buffer, int numberOfBytes);
 int fileSizeCallback(void);
 byte renderImageToSegment(Segment &seg);
 void endImagePlayback(Segment* seg);
+byte renderKeybeatToSegment(Segment &seg, uint8_t samplePeak, float volumeSmth); // nowplaying: Keybeat2d
+void endKeybeatPlayback(Segment* seg);                                           // nowplaying: Keybeat2d
 #endif
 
 //improv.cpp
