@@ -141,6 +141,10 @@
 #include <audio_reactive.h>
 #endif
 
+#ifdef USERMOD_ROOM_MIC_UPLOADER
+#include "../usermods/room_mic_uploader/room_mic_uploader.h"
+#endif
+
 #ifdef USERMOD_ANALOG_CLOCK
 #include "../usermods/Analog_Clock/Analog_Clock.h"
 #endif
@@ -337,6 +341,10 @@ void registerUsermods()
 
 #ifdef USERMOD_AUDIOREACTIVE
   usermods.add(new AudioReactive());
+#endif
+
+#ifdef USERMOD_ROOM_MIC_UPLOADER
+  usermods.add(new RoomMicUploader());
 #endif
 
 #ifdef USERMOD_ANALOG_CLOCK
