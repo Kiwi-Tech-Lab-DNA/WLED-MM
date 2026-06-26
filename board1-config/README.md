@@ -18,6 +18,9 @@ single command.
 | Device token | `room_mic_uploader_secrets.h` (gitignored) | ✅ baked into the binary |
 | Audioreactive **local mic** (vs UDP-receive) | build patch keeps `SR_DMTYPE=1` (`pio-scripts/patch_audioreactive.py`) + runtime `sync.mode` | ⚠️ binary is correct; runtime `sync.mode` can be stale |
 | **HUB75 64×32 matrix** (LED bus + 2D layout) | WLED runtime `cfg.json` only | ❌ wiped by erase → panel dark |
+| **Color order** (RGB, not the GRB default) | WLED runtime `cfg.json` (`hw.led.ins[0].order=1`) | ❌ wiped by erase → R/G swapped (red shows green) |
+| **Boot preset** (`def.ps=10` → Blade on boot) | WLED runtime `cfg.json` | ❌ wiped by erase → panel blank on boot |
+| **Keybeat presets + GIF assets** | LittleFS (`presets.json` + 6 GIFs/`.kb`), sourced from the sibling `nowplaying` repo | ❌ wiped by erase → no looks to load |
 
 So after a from-scratch flash, WiFi comes up by itself (that's how the script can reach
 the board), but the **matrix** must be restored and the **mic mode** asserted. That's
@@ -39,10 +42,17 @@ pio run -e board1 -t upload --upload-port /dev/ttyACM0
 ./board1-config/provision-board1.sh <board-ip>             # default 192.168.1.117
 ```
 
-`provision-board1.sh` POSTs the HUB75 bus + 2D matrix and the local-I2S-mic config,
-reboots, and verifies `leds.count == 2048` and the audio source is `I2S digital`. After
-it prints `PASS`, the panel renders and the mic ingests — and that config persists across
-normal reboots and OTA updates (only a *flash erase* wipes it again).
+`provision-board1.sh` POSTs the HUB75 bus + 2D matrix, the **RGB color order**, the
+local-I2S-mic config, and the **`def.ps=10` boot preset**; uploads the **Keybeat
+presets.json + GIF assets** from the sibling `nowplaying` repo; reboots; and verifies
+`leds.count == 2048`, the audio source is `I2S digital`, and the boot preset applied
+(`ps == 10` → Blade on the panel). After it prints `PASS`, the panel renders Blade in
+correct colors and the mic ingests — and that config persists across normal reboots and
+OTA updates (only a *flash erase* wipes it again).
+
+The Keybeat assets live in the **sibling** `nowplaying` repo
+(`../../nowplaying/firmware/board1/keybeat/`), not here — the script auto-locates them
+relative to its own path and falls back to `$KEYBEAT_DIR` if your checkout differs.
 
 ## Files
 
@@ -56,6 +66,10 @@ normal reboots and OTA updates (only a *flash erase* wipes it again).
 - LED bus: **type 102** (HUB75), `len 2048`, `pin:[1]` — for HUB75 the bus `pin` is the
   panel **chain length**, not a GPIO; the real R/G/B/addr/clk pins come from
   `-D SECTION9_2_PINOUT` (see `wled00/bus_manager.cpp`).
+- **Color order: RGB (`order:1`), not WLED's GRB default (`0`).** This panel's wiring
+  swaps R↔G under GRB — logical red shows green, green shows red (blue is unaffected).
+  Verified on hardware by driving solid R/G/B fills. If a future panel shows wrong colors
+  again, re-test with solid fills and pick the order that makes all three primaries correct.
 - 2D matrix: 1 panel, 64×32, no rotation/serpentine (`b/r/v/s = false`). If your physical
   panel is mirrored or scrambled, adjust those flags here or in the WLED UI (2D Config).
 - `leds.pwr` always reads `0 mA` for HUB75 (excluded from WLED's power/auto-brightness
