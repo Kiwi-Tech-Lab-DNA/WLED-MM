@@ -46,7 +46,12 @@ say "applying HUB75 64x32 matrix + local-I2S-mic config"
 #   logical red showed green, logical green showed red (blue was correct). order=1 fixes it.
 #   Verified on hardware by driving solid R/G/B fills. Do NOT revert to 0.
 # AudioReactive: local generic-I2S mic (type 1) on SD=40/WS=39/SCK=38, sync.mode 0 (not UDP).
-# def.ps=10: boot straight into Keybeat preset 10 (Blade) so the panel is never blank on boot.
+# experiments.I2S_FastPath MUST be 0: with FastPath=1 (a flash-erase default) getSamples()
+#   returns pure silence on this mic — the equalizer freezes AND ingest reads RMS 0, even though
+#   the mic HARDWARE is fine (direct-I2S smoketest shows full signal). Verified 2026-06-26:
+#   flipping it to 0 + reboot restored capture (RMS>gate, /ingest -> matched:true). Do NOT omit.
+# def.ps=3: boot straight into the "Mountain" Equalizer look (fx 230 + custom palette) so the
+#   panel is never blank on boot. (Was 10/Blade; mountain is the hero look.)
 # Autosave OFF: it rewrites presets.json from live state every 15s and corrupts the slot table.
 curl -s -m 8 -X POST "${BASE}/json/cfg" -H 'Content-Type: application/json' -d '{
   "hw":{"led":{
@@ -54,11 +59,12 @@ curl -s -m 8 -X POST "${BASE}/json/cfg" -H 'Content-Type: application/json' -d '
     "ins":[{"type":102,"start":0,"len":2048,"order":1,"rev":false,"skip":0,"pin":[1]}],
     "matrix":{"mpc":1,"panels":[{"b":false,"r":false,"v":false,"s":false,"x":0,"y":0,"h":32,"w":64}]}
   }},
-  "def":{"ps":10,"on":true,"bri":200},
+  "def":{"ps":3,"on":true,"bri":160},
   "um":{
     "AudioReactive":{
       "enabled":true,
       "digitalmic":{"type":1,"pin":[40,39,38,-1,-1,-1]},
+      "experiments":{"I2S_FastPath":0},
       "sync":{"mode":0}
     },
     "Autosave":{"enabled":false}
@@ -66,14 +72,23 @@ curl -s -m 8 -X POST "${BASE}/json/cfg" -H 'Content-Type: application/json' -d '
 }'
 echo
 
-say "restoring Keybeat presets + GIF assets onto the board filesystem"
-# The Keybeat looks live in the SIBLING nowplaying repo (not WLED-MM): the preset table
-# (presets.json) plus six GIFs + their .kb beat sidecars. A flash erase wipes all of these
-# from LittleFS, so re-upload them here. Each .gif/.kb goes to the FS ROOT (filename "/x.gif")
-# because the Keybeat loader resolves seg names against the root. presets-keybeat.json carries
-# the 64x32 segment bounds (start/stop/startY/stopY) — without them {"ps":N} loads a 1px seg.
-# Override KEYBEAT_DIR if your checkout layout differs.
+say "restoring presets + palette + GIF assets onto the board filesystem"
+# The looks live in the SIBLING nowplaying repo (not WLED-MM). A flash erase wipes LittleFS,
+# so re-upload here:
+#   - Keybeat (firmware/board1/keybeat/): six GIFs + .kb beat sidecars + presets-keybeat.json
+#     (slots 10-15). Each .gif/.kb goes to the FS ROOT ("/x.gif") — the Keybeat loader resolves
+#     seg names against root. The preset table carries 64x32 seg bounds; without them {"ps":N}
+#     loads a 1px seg.
+#   - Mountain (firmware/board1/equalizer/): the boot look = fx 230 Equalizer LF + a CUSTOM
+#     palette. palette-mountain.json -> /palette0.json (this makes it WLED custom palette
+#     **pal 255**: the render path resolves customPalettes[255-pal], so palette0.json == 255,
+#     NOT the palcount+index number /json/info shows — see equalizer/README.md). preset-mountain
+#     .json carries slot 3, which references pal 255. Custom palettes only (re)load on BOOT, so
+#     the reboot below is required for the palette to exist before slot 3 renders.
+# We MERGE the keybeat + mountain preset tables into the single /presets.json the board loads.
+# Override KEYBEAT_DIR / EQ_DIR if your checkout layout differs.
 KEYBEAT_DIR="${KEYBEAT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../nowplaying/firmware/board1/keybeat" 2>/dev/null && pwd || true)}"
+EQ_DIR="${EQ_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../nowplaying/firmware/board1/equalizer" 2>/dev/null && pwd || true)}"
 if [ -n "${KEYBEAT_DIR}" ] && [ -d "${KEYBEAT_DIR}/assets" ]; then
   for f in "${KEYBEAT_DIR}"/assets/*.gif "${KEYBEAT_DIR}"/assets/*.kb; do
     [ -e "$f" ] || continue
@@ -81,12 +96,31 @@ if [ -n "${KEYBEAT_DIR}" ] && [ -d "${KEYBEAT_DIR}/assets" ]; then
     curl -s -m 30 -F "data=@${f};filename=/${base}" "${BASE}/edit" >/dev/null \
       && printf '  uploaded /%s\n' "$base" || printf '  FAILED /%s\n' "$base"
   done
-  curl -s -m 15 -F "data=@${KEYBEAT_DIR}/presets-keybeat.json;filename=/presets.json" "${BASE}/edit" >/dev/null \
-    && echo "  uploaded /presets.json (Keybeat slots 10-15)" || echo "  FAILED /presets.json"
+
+  # Mountain custom palette -> /palette0.json (== pal 255 at render time)
+  if [ -n "${EQ_DIR}" ] && [ -f "${EQ_DIR}/palette-mountain.json" ]; then
+    curl -s -m 15 -F "data=@${EQ_DIR}/palette-mountain.json;filename=/palette0.json" "${BASE}/edit" >/dev/null \
+      && echo "  uploaded /palette0.json (Mountain gradient -> pal 255)" || echo "  FAILED /palette0.json"
+  else
+    echo "  WARN: equalizer dir/palette not found (EQ_DIR='${EQ_DIR:-<unset>}') — boot look will be wrong."
+  fi
+
+  # Merge mountain slot 3 + keybeat slots 10-15 into one /presets.json
+  MERGED="$(mktemp)"
+  if [ -n "${EQ_DIR}" ] && [ -f "${EQ_DIR}/preset-mountain.json" ] && \
+     python3 -c "import json,sys; kb=json.load(open('${KEYBEAT_DIR}/presets-keybeat.json')); mt=json.load(open('${EQ_DIR}/preset-mountain.json')); d={}; d.update(mt); d.update(kb); json.dump(d,open('${MERGED}','w'),separators=(',',':'))" 2>/dev/null; then
+    curl -s -m 15 -F "data=@${MERGED};filename=/presets.json" "${BASE}/edit" >/dev/null \
+      && echo "  uploaded /presets.json (Mountain slot 3 + Keybeat slots 10-15)" || echo "  FAILED /presets.json"
+  else
+    # fall back to keybeat-only so the panel at least has the keybeat looks
+    curl -s -m 15 -F "data=@${KEYBEAT_DIR}/presets-keybeat.json;filename=/presets.json" "${BASE}/edit" >/dev/null \
+      && echo "  uploaded /presets.json (Keybeat slots 10-15 ONLY — mountain merge failed)" || echo "  FAILED /presets.json"
+  fi
+  rm -f "${MERGED}"
 else
   echo "  SKIP: keybeat dir not found (looked in '${KEYBEAT_DIR:-<unset>}')."
   echo "        Set KEYBEAT_DIR=/path/to/nowplaying/firmware/board1/keybeat and re-run,"
-  echo "        else the panel boots blank (no preset 10 to load)."
+  echo "        else the panel boots blank (no preset 3 to load)."
 fi
 
 say "default state: on, moderate brightness"
@@ -114,15 +148,18 @@ else
   exit 1
 fi
 
-say "verifying boot preset applied (panel should be showing Blade, not blank)"
+say "verifying boot preset applied (panel should be showing the Mountain spectrum, not blank)"
 sleep 2
 st=$(curl -s -m 6 "${BASE}/json/state" 2>/dev/null) || true
 ps=$(printf '%s' "$st" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("ps",""))' 2>/dev/null || true)
-seg_n=$(printf '%s' "$st" | python3 -c 'import sys,json;d=json.load(sys.stdin);print((d.get("seg") or [{}])[0].get("n",""))' 2>/dev/null || true)
-if [ "$ps" = "10" ]; then
-  echo "PASS: boot preset 10 applied (seg='${seg_n}', expect blade.gif)."
+seg_fx=$(printf '%s' "$st" | python3 -c 'import sys,json;d=json.load(sys.stdin);print((d.get("seg") or [{}])[0].get("fx",""))' 2>/dev/null || true)
+seg_pal=$(printf '%s' "$st" | python3 -c 'import sys,json;d=json.load(sys.stdin);print((d.get("seg") or [{}])[0].get("pal",""))' 2>/dev/null || true)
+cpal=$(curl -s -m 6 "${BASE}/json/info" 2>/dev/null | python3 -c 'import sys,json;print(json.load(sys.stdin).get("cpalcount",0))' 2>/dev/null || echo 0)
+if [ "$ps" = "3" ] && [ "$seg_fx" = "230" ] && [ "$seg_pal" = "255" ]; then
+  echo "PASS: boot preset 3 'Mountain' applied (fx=${seg_fx}, pal=${seg_pal}, custom palettes loaded=${cpal})."
 else
-  echo "WARN: boot preset did not auto-apply (ps='${ps}', seg='${seg_n}')."
-  echo "      The matrix/mic are fine, but presets.json or the GIF assets may be missing."
-  echo "      Confirm the 'restoring Keybeat presets' step above uploaded all files, then re-run."
+  echo "WARN: mountain boot look not fully applied (ps='${ps}', fx='${seg_fx}', pal='${seg_pal}', cpalcount=${cpal})."
+  echo "      - pal must be 255 (palette0.json) and cpalcount>=1, else /palette0.json didn't load."
+  echo "      - If the board reboot-loops, the seg pal is wrong (NOT 255) — see equalizer/README.md."
+  echo "      Confirm the 'restoring presets + palette' step uploaded all files, then re-run."
 fi
