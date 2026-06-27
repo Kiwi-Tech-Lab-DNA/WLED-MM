@@ -5,6 +5,8 @@
 #include "esp_heap_caps.h"
 #include "room_mic_uploader_secrets.h"   // NP_BASE_URL + NP_DEVICE_TOKEN (gitignored)
 #include "uart_link.h"                    // b2-13 inter-board UART1 frame codec (shared with Board 2)
+#include <Wire.h>                         // b2-13 knobs: I2C bus for the Seesaw encoders
+#include "Adafruit_seesaw.h"              // b2-13 knobs: 3x Adafruit #5880 rotary encoders
 
 // room_mic_uploader — Board 1 cloud-ingest as a WLED-MM usermod.
 //
@@ -61,6 +63,27 @@ class RoomMicUploader : public Usermod {
     // Poll the cadence wait in small steps so a Board 2 RE-CHECK tap fires within ~this long
     // instead of waiting out the full CADENCE_MS.
     static constexpr uint32_t CADENCE_POLL_MS = 100;
+
+    // --- b2-13 knobs: 3 Seesaw rotary encoders (the toast source for Board 2) ---
+    // I2C on Wire1 = SDA47/SCL48 (WLED's primary Wire is 42/41 — a separate bus, no collision).
+    // Read inside the UART task (it already owns Serial1, so one writer emits the KNOB_EVENT).
+    // value sent = the encoder's accumulated position; flags bit0 = the encoder push switch.
+    // Index order matches the protocol knob id (0=mode,1=bright,2=gain). Bench-verified pins +
+    // addresses from firmware/board1-smoketest/src/knob_test.cpp (turn+press, 2026-06-23).
+    static constexpr int8_t   KNOB_SDA   = 47;
+    static constexpr int8_t   KNOB_SCL   = 48;
+    static constexpr uint8_t  KNOB_SW    = 24;   // seesaw pin of the encoder's push switch
+    static constexpr uint32_t KNOB_POLL_MS = 20; // ~50 Hz: snappy without hammering the I2C bus
+    static constexpr uint8_t  KNOB_N     = 3;
+    // The per-knob address / protocol-id / name tables (index-aligned to the protocol knob id:
+    // 0=mode 0x37, 1=bright 0x36, 2=gain 0x38) live as local statics in knobsBegin/pollKnobs —
+    // gnu++11 ODR-uses a static-constexpr array member, which needs an out-of-line def a
+    // header-only usermod can't give. Scalars above are fine (used only as constant exprs).
+
+    Adafruit_seesaw *knob[KNOB_N]  = {nullptr, nullptr, nullptr};
+    int32_t  knobPos[KNOB_N]       = {0, 0, 0};   // raw encoder position (signed, for delta)
+    int32_t  knobLevel[KNOB_N]     = {0, 0, 0};   // 0-based level (delta-accumulated, floored at 0)
+    bool     knobPressed[KNOB_N]   = {false, false, false};
 
     // one PSRAM buffer holding the whole multipart body: [preamble][44B WAV][PCM][epilogue]
     uint8_t *body = nullptr;
@@ -242,6 +265,62 @@ class RoomMicUploader : public Usermod {
 
     static void taskTrampoline(void *arg) { static_cast<RoomMicUploader *>(arg)->run(); }
 
+    // b2-13 knobs: bring up Wire1 + attach whichever Seesaw encoders answer. Safe if some/all
+    // are absent — a missing encoder is logged and simply never emits. Called once from the
+    // UART task so all I2C lives on that one task (no cross-task Wire1 access).
+    void knobsBegin() {
+      static const uint8_t      ADDR[KNOB_N] = {0x37, 0x36, 0x38};
+      static const char * const NAME[KNOB_N] = {"mode", "bright", "gain"};
+      Wire1.begin(KNOB_SDA, KNOB_SCL);
+      Wire1.setClock(100000);
+      uint8_t found = 0;
+      for (uint8_t i = 0; i < KNOB_N; i++) {
+        Adafruit_seesaw *s = new Adafruit_seesaw(&Wire1);
+        if (s && s->begin(ADDR[i])) {
+          s->pinMode(KNOB_SW, INPUT_PULLUP);
+          knob[i]        = s;
+          knobPos[i]     = s->getEncoderPosition();
+          knobPressed[i] = false;
+          found++;
+          USER_PRINTF("[knob] seesaw 0x%02X (%s) ready\n", ADDR[i], NAME[i]);
+        } else {
+          delete s;
+          knob[i] = nullptr;
+          USER_PRINTF("[knob] seesaw 0x%02X (%s) NOT found\n", ADDR[i], NAME[i]);
+        }
+      }
+      USER_PRINTF("[knob] %u/%u encoder(s) ready on Wire1 (SDA%d/SCL%d)\n",
+                  found, (unsigned)KNOB_N, (int)KNOB_SDA, (int)KNOB_SCL);
+    }
+
+    // Read every present encoder; emit a KNOB_EVENT on each turn (value = new accumulated
+    // position) or rising-edge press (flags bit0). buf is the UART task's frame scratch.
+    void pollKnobs(uint8_t *buf, size_t cap) {
+      static const uint8_t      ID[KNOB_N]   = {0, 1, 2};   // KNOB_EVENT knob u8
+      static const char * const NAME[KNOB_N] = {"mode", "bright", "gain"};
+      for (uint8_t i = 0; i < KNOB_N; i++) {
+        if (!knob[i]) continue;
+        int32_t pos = knob[i]->getEncoderPosition();
+        if (pos != knobPos[i]) {
+          int32_t delta = pos - knobPos[i];
+          knobPos[i] = pos;
+          knobLevel[i] += delta;                          // 0-based level: floor at 0 so a toast
+          if (knobLevel[i] < 0) knobLevel[i] = 0;         // value never reads negative
+          size_t n = uart_make_knob(ID[i], (int16_t)knobLevel[i], 0x00, buf, cap);
+          Serial1.write(buf, n);
+          USER_PRINTF("[knob] %s turn level=%ld (%+ld) -> KNOB_EVENT\n",
+                      NAME[i], (long)knobLevel[i], (long)delta);
+        }
+        bool pressed = !knob[i]->digitalRead(KNOB_SW);   // INPUT_PULLUP: pressed == LOW
+        if (pressed && !knobPressed[i]) {
+          size_t n = uart_make_knob(ID[i], (int16_t)knobLevel[i], 0x01, buf, cap);
+          Serial1.write(buf, n);
+          USER_PRINTF("[knob] %s PRESS -> KNOB_EVENT\n", NAME[i]);
+        }
+        knobPressed[i] = pressed;
+      }
+    }
+
     // b2-13 UART task: owns Serial1, emits the ~1 Hz HEARTBEAT and decodes inbound frames.
     // Lives on its OWN task (not the ingest task) so the heartbeat keeps flowing during the
     // multi-second blocking POST — otherwise Board 2 would see "ear down" on every ingest,
@@ -250,9 +329,10 @@ class RoomMicUploader : public Usermod {
       Serial1.begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
       USER_PRINTF("[uart] link up: RX=IO%d TX=IO%d @ %u, heartbeat %u ms\n",
                   (int)UART_RX_PIN, (int)UART_TX_PIN, (unsigned)UART_BAUD, (unsigned)HEARTBEAT_MS);
+      knobsBegin();   // b2-13: I2C encoders share this task so Serial1 stays single-writer
       UartDecoder dec;
       uint8_t buf[UART_MAX_FRAME];
-      uint32_t last_hb = 0;
+      uint32_t last_hb = 0, last_knob = 0;
       for (;;) {
         while (Serial1.available()) {
           if (dec.feed((uint8_t)Serial1.read())) {
@@ -267,6 +347,10 @@ class RoomMicUploader : public Usermod {
           }
         }
         uint32_t now = millis();
+        if (now - last_knob >= KNOB_POLL_MS) {
+          last_knob = now;
+          pollKnobs(buf, sizeof buf);   // emits KNOB_EVENT on any turn/press
+        }
         if (now - last_hb >= HEARTBEAT_MS) {
           last_hb = now;
           size_t n = uart_make_heartbeat(now / 1000, buf, sizeof buf);

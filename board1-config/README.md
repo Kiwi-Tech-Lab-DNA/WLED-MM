@@ -16,10 +16,11 @@ single command.
 |---|---|---|
 | WiFi creds | `-D CLIENT_SSID/CLIENT_PASS` in `platformio_override.ini` (gitignored) | ✅ baked into the binary |
 | Device token | `room_mic_uploader_secrets.h` (gitignored) | ✅ baked into the binary |
+| **Knob encoders** (3× Seesaw, b2-13) | `lib_deps` (Adafruit seesaw + BusIO) in `[env:board1]` of `platformio_override.ini` (gitignored) — the `room_mic_uploader` usermod reads them on Wire1 (SDA47/SCL48) | ✅ baked into the binary |
 | Audioreactive **local mic** (vs UDP-receive) | build patch keeps `SR_DMTYPE=1` (`pio-scripts/patch_audioreactive.py`) + runtime `sync.mode` | ⚠️ binary is correct; runtime `sync.mode` can be stale |
 | **HUB75 64×32 matrix** (LED bus + 2D layout) | WLED runtime `cfg.json` only | ❌ wiped by erase → panel dark |
 | **Color order** (RGB, not the GRB default) | WLED runtime `cfg.json` (`hw.led.ins[0].order=1`) | ❌ wiped by erase → R/G swapped (red shows green) |
-| **Boot preset** (`def.ps=10` → Blade on boot) | WLED runtime `cfg.json` | ❌ wiped by erase → panel blank on boot |
+| **Boot preset** (`def.ps=3` → Mountain spectrum on boot) | WLED runtime `cfg.json` | ❌ wiped by erase → panel blank on boot |
 | **Keybeat presets + GIF assets** | LittleFS (`presets.json` + 6 GIFs/`.kb`), sourced from the sibling `nowplaying` repo | ❌ wiped by erase → no looks to load |
 
 So after a from-scratch flash, WiFi comes up by itself (that's how the script can reach
@@ -33,6 +34,10 @@ all `provision-board1.sh` does.
 cp ../usermods/room_mic_uploader/room_mic_uploader_secrets.h.example \
    ../usermods/room_mic_uploader/room_mic_uploader_secrets.h     # fill NP_DEVICE_TOKEN (== Board 2's)
 #    set CLIENT_SSID / CLIENT_PASS in platformio_override.ini (board1 env)
+#    the [env:board1] override must also carry the knob deps (gitignored, so not in a clone):
+#      lib_deps = ${env:esp32S3_8MB_PSRAM_M_opi.lib_deps}
+#        adafruit/Adafruit seesaw Library @ ^1.7.0
+#        adafruit/Adafruit BusIO @ ^1.16.0
 
 # 1. build + flash (Board 1 = /dev/ttyACM0)
 pio run -e board1 -t erase  --upload-port /dev/ttyACM0     # clears any stale/corrupt cfg
@@ -43,12 +48,13 @@ pio run -e board1 -t upload --upload-port /dev/ttyACM0
 ```
 
 `provision-board1.sh` POSTs the HUB75 bus + 2D matrix, the **RGB color order**, the
-local-I2S-mic config, and the **`def.ps=10` boot preset**; uploads the **Keybeat
-presets.json + GIF assets** from the sibling `nowplaying` repo; reboots; and verifies
-`leds.count == 2048`, the audio source is `I2S digital`, and the boot preset applied
-(`ps == 10` → Blade on the panel). After it prints `PASS`, the panel renders Blade in
-correct colors and the mic ingests — and that config persists across normal reboots and
-OTA updates (only a *flash erase* wipes it again).
+local-I2S-mic config (incl. `I2S_FastPath=0` — the silent-mic fix), and the **`def.ps=3`
+boot preset**; uploads the **Mountain palette + preset and the Keybeat presets.json + GIF
+assets** from the sibling `nowplaying` repo; reboots; and verifies `leds.count == 2048`,
+the audio source is `I2S digital`, and the boot preset applied (`ps == 3`, `fx == 230`,
+`pal == 255` → the Mountain spectrum on the panel). After it prints `PASS`, the panel
+renders the Mountain look in correct colors and the mic ingests — and that config persists
+across normal reboots and OTA updates (only a *flash erase* wipes it again).
 
 The Keybeat assets live in the **sibling** `nowplaying` repo
 (`../../nowplaying/firmware/board1/keybeat/`), not here — the script auto-locates them
