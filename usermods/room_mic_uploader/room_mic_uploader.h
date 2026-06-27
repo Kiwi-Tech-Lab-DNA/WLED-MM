@@ -4,6 +4,7 @@
 #include <WiFiClient.h>
 #include "esp_heap_caps.h"
 #include "room_mic_uploader_secrets.h"   // NP_BASE_URL + NP_DEVICE_TOKEN (gitignored)
+#include "uart_link.h"                    // b2-13 inter-board UART1 frame codec (shared with Board 2)
 
 // room_mic_uploader — Board 1 cloud-ingest as a WLED-MM usermod.
 //
@@ -48,12 +49,31 @@ class RoomMicUploader : public Usermod {
 
     static constexpr const char *BOUNDARY = "----board1ingestBoundary7e3a";
 
+    // --- b2-13 inter-board UART link (the direct Board 1 <-> Board 2 wire, NOT the cloud) ---
+    // P4 JST on Board 2 is IO17=TX / IO18=RX, wired straight to Board 1's GPIO17/18 — so the
+    // roles cross: Board 1 RX=17 (hears Board 2's TX), TX=18 (Board 2 hears it on its RX=18).
+    // We emit a ~1 Hz HEARTBEAT (Board 2's "ear up" liveness, EAR_TIMEOUT_MS=3000 there) and,
+    // on an inbound RECHECK, fire an immediate gate-bypassing ingest. Codec in uart_link.h.
+    static constexpr int8_t   UART_RX_PIN   = 17;
+    static constexpr int8_t   UART_TX_PIN   = 18;
+    static constexpr uint32_t UART_BAUD     = 115200;
+    static constexpr uint32_t HEARTBEAT_MS  = 1000;
+    // Poll the cadence wait in small steps so a Board 2 RE-CHECK tap fires within ~this long
+    // instead of waiting out the full CADENCE_MS.
+    static constexpr uint32_t CADENCE_POLL_MS = 100;
+
     // one PSRAM buffer holding the whole multipart body: [preamble][44B WAV][PCM][epilogue]
     uint8_t *body = nullptr;
     size_t   preambleLen = 0, epilogueLen = 0, headerOff = 0, pcmOff = 0, bodyTotal = 0;
 
     TaskHandle_t ingestTask = nullptr;
     volatile bool ready = false;   // body allocated + tap expected; task may run
+
+    // b2-13: the UART task owns Serial1; it sets recheckRequest on an inbound RECHECK and the
+    // ingest task consumes it. One volatile bool, single writer + single reader — no lock
+    // (same loose hand-off as Board 2's g_recheck_request).
+    TaskHandle_t  uartTask       = nullptr;
+    volatile bool recheckRequest = false;
 
     // canonical 44-byte WAV header (RIFF/WAVE/fmt /data, no extra chunks) — byte-exact
     static void writeWavHeader(uint8_t *p, uint32_t pcmLen) {
@@ -183,27 +203,87 @@ class RoomMicUploader : public Usermod {
       USER_PRINTF("[ingest] POST %s -> %s | %s\n", NP_INGEST_PATH, resp, body);
     }
 
+    // Wait out CADENCE_MS, but break early (returning true) the moment Board 2 asks for a
+    // RE-CHECK. Polls in small steps with vTaskDelay so it both reacts fast and keeps core-0
+    // IDLE fed (the watchdog trap that bit this task before).
+    bool waitCadenceOrRecheck() {
+      uint32_t waited = 0;
+      while (waited < CADENCE_MS) {
+        if (recheckRequest) { recheckRequest = false; return true; }
+        vTaskDelay(pdMS_TO_TICKS(CADENCE_POLL_MS));
+        waited += CADENCE_POLL_MS;
+      }
+      return false;
+    }
+
     void run() {
       for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(CADENCE_MS));
+        bool forced = waitCadenceOrRecheck();   // forced == a Board 2 RE-CHECK tap
         if (!ready) continue;
-        if (!(WLED_CONNECTED)) { USER_PRINTLN(F("[ingest] wifi down — skip")); continue; }
+        if (!(WLED_CONNECTED)) {
+          USER_PRINTLN(forced ? F("[ingest] RECHECK but wifi down — skip")
+                              : F("[ingest] wifi down — skip"));
+          continue;
+        }
 
         double rms = captureWindow();
         if (rms < 0) { USER_PRINTLN(F("[ingest] tap not ready / window short — skip")); continue; }
-        if (rms < RMS_GATE) {
+        // A RE-CHECK is an explicit "listen now" from the user, so it bypasses the silence
+        // gate; the periodic capture still honours it to avoid POSTing a quiet room.
+        if (!forced && rms < RMS_GATE) {
           USER_PRINTF("[ingest] room below gate (RMS %.0f < %.0f) — skip\n", rms, RMS_GATE);
           continue;
         }
-        USER_PRINTF("[ingest] captured %u samples  RMS %.0f  -> POST\n", (unsigned)CAPTURE_SAMPLES, rms);
+        if (forced) USER_PRINTF("[ingest] RECHECK -> forced ingest (RMS %.0f, gate bypassed) -> POST\n", rms);
+        else        USER_PRINTF("[ingest] captured %u samples  RMS %.0f  -> POST\n", (unsigned)CAPTURE_SAMPLES, rms);
         postIngest();
       }
     }
 
     static void taskTrampoline(void *arg) { static_cast<RoomMicUploader *>(arg)->run(); }
 
+    // b2-13 UART task: owns Serial1, emits the ~1 Hz HEARTBEAT and decodes inbound frames.
+    // Lives on its OWN task (not the ingest task) so the heartbeat keeps flowing during the
+    // multi-second blocking POST — otherwise Board 2 would see "ear down" on every ingest,
+    // exactly when the ear is busiest. Non-blocking reads + tiny writes + vTaskDelay only.
+    void runUart() {
+      Serial1.begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
+      USER_PRINTF("[uart] link up: RX=IO%d TX=IO%d @ %u, heartbeat %u ms\n",
+                  (int)UART_RX_PIN, (int)UART_TX_PIN, (unsigned)UART_BAUD, (unsigned)HEARTBEAT_MS);
+      UartDecoder dec;
+      uint8_t buf[UART_MAX_FRAME];
+      uint32_t last_hb = 0;
+      for (;;) {
+        while (Serial1.available()) {
+          if (dec.feed((uint8_t)Serial1.read())) {
+            if (dec.type == UART_RECHECK) {
+              recheckRequest = true;
+              USER_PRINTLN(F("[uart] RECHECK in <- Board 2 (forcing ingest)"));
+            } else if (dec.type == UART_KNOB_EVENT) {
+              uint8_t k, fl; int16_t v;
+              if (uart_parse_knob(dec, &k, &v, &fl))
+                USER_PRINTF("[uart] knob in: id=%d value=%d flags=0x%02X (forwarded, no-op here)\n", k, v, fl);
+            }
+          }
+        }
+        uint32_t now = millis();
+        if (now - last_hb >= HEARTBEAT_MS) {
+          last_hb = now;
+          size_t n = uart_make_heartbeat(now / 1000, buf, sizeof buf);
+          Serial1.write(buf, n);
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+      }
+    }
+
+    static void uartTrampoline(void *arg) { static_cast<RoomMicUploader *>(arg)->runUart(); }
+
   public:
     void setup() override {
+      // The inter-board UART link comes up first and independently of the (large) multipart
+      // body: the heartbeat + RE-CHECK path must work even if the ingest buffer fails to alloc.
+      xTaskCreatePinnedToCore(uartTrampoline, "npUart", 4096, this, 1, &uartTask, 0);
+
       if (!allocBody()) return;
       ready = true;
       // Pin to core 0 (protocol/FFT core) at low priority so the blocking POST never
