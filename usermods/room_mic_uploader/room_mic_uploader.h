@@ -35,6 +35,14 @@ extern int16_t*          npPcmRing;      // PSRAM ring of int16 mic samples (220
 extern volatile uint32_t npPcmWritten;   // total samples ever written (monotonic)
 extern uint32_t          npPcmRingLen;   // ring length in samples (single source of truth)
 
+// b2-13 gain knob: runtime viz-punch multiplier. The Mountain look auto-normalizes its own
+// gain and ignores WLED's inputLevel, so the gain knob drives THIS instead. 1.0 = the unchanged
+// look; >1 punchier, <1 softer. We DEFINE the single global here (this header is #included once,
+// in usermods_list.cpp); the audioreactive patch (NP_VIZ_GAIN) only injects an `extern` + the
+// multiply into the LFX output. That ownership split means a drifted patch anchor just makes the
+// gain knob a no-op — it can never leave npVizGain undefined and break the link.
+float                    npVizGain = 1.0f;
+
 class RoomMicUploader : public Usermod {
   private:
     // capture / contract config
@@ -75,6 +83,12 @@ class RoomMicUploader : public Usermod {
     static constexpr uint8_t  KNOB_SW    = 24;   // seesaw pin of the encoder's push switch
     static constexpr uint32_t KNOB_POLL_MS = 20; // ~50 Hz: snappy without hammering the I2C bus
     static constexpr uint8_t  KNOB_N     = 3;
+    // b2-13 local apply: target units moved per raw encoder count (bench-tunable). The #5880
+    // reports a few counts per detent, so this scales a knob turn onto the 0..255 ranges.
+    static constexpr int16_t  BRIGHT_STEP = 6;   // bri units per encoder count
+    static constexpr int16_t  GAIN_STEP   = 6;   // viz-punch level units per encoder count
+    static constexpr float    GAIN_MIN    = 0.1f; // npVizGain floor: never fully zero the bars (a flat,
+                                                  // frozen equalizer reads as "hung", not "low gain")
     // The per-knob address / protocol-id / name tables (index-aligned to the protocol knob id:
     // 0=mode 0x37, 1=bright 0x36, 2=gain 0x38) live as local statics in knobsBegin/pollKnobs —
     // gnu++11 ODR-uses a static-constexpr array member, which needs an out-of-line def a
@@ -82,8 +96,39 @@ class RoomMicUploader : public Usermod {
 
     Adafruit_seesaw *knob[KNOB_N]  = {nullptr, nullptr, nullptr};
     int32_t  knobPos[KNOB_N]       = {0, 0, 0};   // raw encoder position (signed, for delta)
-    int32_t  knobLevel[KNOB_N]     = {0, 0, 0};   // 0-based level (delta-accumulated, floored at 0)
     bool     knobPressed[KNOB_N]   = {false, false, false};
+
+    // b2-13 local knob apply: the knobs now DRIVE the Board-1 visualizer, not just the toast.
+    // bright + mode read LIVE WLED state at turn time (bri / currentPreset) rather than a mirror,
+    // so a preset load or an external change can't leave a stale target that snaps on the next
+    // click. gainTarget is the one bit of retained state (npVizGain is core-0-owned, nothing
+    // else moves it); seeded from npVizGain in knobsBegin.
+    int16_t  gainTarget = 128;   // viz-punch level 0..255 -> npVizGain = gainTarget/128 (128 = unity)
+    uint8_t  modeIdx    = 0;     // index into presetSlots(); re-synced from currentPreset each turn
+    // bright + preset apply must run in the WLED main loop (stateUpdated/applyPreset expect it),
+    // but pollKnobs runs in the uartTask (core 0). Marshal via these volatiles, drained in loop()
+    // on core 1 — single producer / single consumer, last-write-wins (fine for a knob). gain is an
+    // atomic float write so it applies inline. -1 == nothing pending.
+    volatile int16_t pendingBri    = -1;   // 0..255 brightness to apply
+    volatile int16_t pendingPreset = -1;   // preset slot to apply
+
+    static int16_t clampU8(int32_t v) { return v < 0 ? 0 : (v > 255 ? 255 : (int16_t)v); }
+
+    // The looks the mode knob cycles: Mountain (boot/home) + the six Keybeat GIFs. These slots
+    // are uploaded to board flash by board1-config/provision-board1.sh (they live in flash, not
+    // the repo — see appliance-reproducibility). Local static, returned by pointer: a
+    // static-constexpr array MEMBER ODR-fails to link in a header-only usermod (gnu++11).
+    static const uint8_t *presetSlots(uint8_t &count) {
+      static const uint8_t SLOTS[] = {3, 10, 11, 12, 13, 14, 15};
+      count = (uint8_t)(sizeof(SLOTS) / sizeof(SLOTS[0]));
+      return SLOTS;
+    }
+    // Index of `slot` within presetSlots(), or -1 if it isn't one of ours.
+    static int presetIndexOf(uint8_t slot) {
+      uint8_t n; const uint8_t *s = presetSlots(n);
+      for (uint8_t i = 0; i < n; i++) if (s[i] == slot) return i;
+      return -1;
+    }
 
     // one PSRAM buffer holding the whole multipart body: [preamble][44B WAV][PCM][epilogue]
     uint8_t *body = nullptr;
@@ -291,29 +336,62 @@ class RoomMicUploader : public Usermod {
       }
       USER_PRINTF("[knob] %u/%u encoder(s) ready on Wire1 (SDA%d/SCL%d)\n",
                   found, (unsigned)KNOB_N, (int)KNOB_SDA, (int)KNOB_SCL);
+      // Seed retained gain from npVizGain, and modeIdx from whatever preset actually booted
+      // (not a hardcoded 0) so the first mode detent steps from the live look. bright reads
+      // live `bri` at turn time, so it needs no seed.
+      gainTarget = (int16_t)(npVizGain * 128.0f + 0.5f); // viz-punch unity (npVizGain 1.0 -> 128)
+      int idx    = presetIndexOf(currentPreset);
+      modeIdx    = (idx >= 0) ? (uint8_t)idx : 0;         // fall back to home if not one of ours
     }
 
-    // Read every present encoder; emit a KNOB_EVENT on each turn (value = new accumulated
-    // position) or rising-edge press (flags bit0). buf is the UART task's frame scratch.
+    // Read every present encoder, APPLY it to the Board-1 visualizer locally, and emit a
+    // KNOB_EVENT to Board 2 whose value is the real applied level (brightness / gain / preset
+    // id). buf is the UART task's frame scratch. Runs in the uartTask (core 0); bright + preset
+    // are marshalled to loop() (core 1) via pendingBri/pendingPreset, gain applies inline.
     void pollKnobs(uint8_t *buf, size_t cap) {
       static const uint8_t      ID[KNOB_N]   = {0, 1, 2};   // KNOB_EVENT knob u8
       static const char * const NAME[KNOB_N] = {"mode", "bright", "gain"};
+      uint8_t presetN; const uint8_t *slots = presetSlots(presetN);
+
       for (uint8_t i = 0; i < KNOB_N; i++) {
         if (!knob[i]) continue;
         int32_t pos = knob[i]->getEncoderPosition();
         if (pos != knobPos[i]) {
           int32_t delta = pos - knobPos[i];
           knobPos[i] = pos;
-          knobLevel[i] += delta;                          // 0-based level: floor at 0 so a toast
-          if (knobLevel[i] < 0) knobLevel[i] = 0;         // value never reads negative
-          size_t n = uart_make_knob(ID[i], (int16_t)knobLevel[i], 0x00, buf, cap);
+          int16_t level;
+          if (i == 0) {                  // mode: step one look per detent, wrapping
+            int cur = presetIndexOf(currentPreset);       // re-sync to the LIVE preset first, so an
+            if (cur >= 0) modeIdx = (uint8_t)cur;          // external change / press-home can't desync us
+            modeIdx = (uint8_t)((modeIdx + presetN + (delta > 0 ? 1 : -1)) % presetN);
+            pendingPreset = slots[modeIdx];               // applyPreset() runs in loop()
+            level = modeIdx;                              // toast: 0-based mode number (not the raw slot id)
+          } else if (i == 1) {           // bright -> WLED brightness, nudged from LIVE bri (no stale mirror)
+            int16_t newBri = clampU8(bri + delta * BRIGHT_STEP);
+            pendingBri = newBri;                          // bri + stateUpdated() run in loop()
+            level = newBri;
+          } else {                       // gain -> LFX viz-punch (npVizGain); inputLevel is dead on the LFX_DSP path
+            gainTarget = clampU8(gainTarget + delta * GAIN_STEP);
+            float g = (float)gainTarget / 128.0f;         // 128 = unity, 255 ~= 2x punch
+            npVizGain = g < GAIN_MIN ? GAIN_MIN : g;      // floored so the bars never freeze flat
+            level = gainTarget;
+          }
+          size_t n = uart_make_knob(ID[i], level, 0x00, buf, cap);
           Serial1.write(buf, n);
-          USER_PRINTF("[knob] %s turn level=%ld (%+ld) -> KNOB_EVENT\n",
-                      NAME[i], (long)knobLevel[i], (long)delta);
+          USER_PRINTF("[knob] %s turn level=%d (%+ld) -> apply + KNOB_EVENT\n",
+                      NAME[i], (int)level, (long)delta);
         }
         bool pressed = !knob[i]->digitalRead(KNOB_SW);   // INPUT_PULLUP: pressed == LOW
         if (pressed && !knobPressed[i]) {
-          size_t n = uart_make_knob(ID[i], (int16_t)knobLevel[i], 0x01, buf, cap);
+          int16_t level;
+          if (i == 0) {                  // mode press = jump home (Mountain; clock face not ported yet)
+            modeIdx = 0;
+            pendingPreset = slots[0];
+            level = modeIdx;
+          } else {                       // bright/gain press = no local action, just the toast cue
+            level = (i == 1) ? bri : gainTarget;
+          }
+          size_t n = uart_make_knob(ID[i], level, 0x01, buf, cap);
           Serial1.write(buf, n);
           USER_PRINTF("[knob] %s PRESS -> KNOB_EVENT\n", NAME[i]);
         }
@@ -377,7 +455,26 @@ class RoomMicUploader : public Usermod {
                    (unsigned)bodyTotal, (unsigned)CAPTURE_SECONDS, (unsigned)SAMPLE_RATE, (unsigned)CADENCE_MS);
     }
 
-    void loop() override {}   // all work is on the ingest task; keep the render loop free
+    // Drain knob requests marshalled from the uartTask (core 0). bri+stateUpdated() and
+    // applyPreset() expect the WLED main-loop context (core 1) — running them here avoids
+    // stateUpdated() reentrancy against the render loop. Ingest/heartbeat stay on their tasks.
+    void loop() override {
+      // Preset FIRST, then brightness: applyPreset() restores the preset's own stored bri, so a
+      // bright nudge that landed in the same poll must be applied AFTER it to win (otherwise the
+      // user's brightness change silently vanishes under the preset's value).
+      int16_t p = pendingPreset;
+      if (p >= 0) {
+        pendingPreset = -1;
+        applyPreset((uint8_t)p, CALL_MODE_DIRECT_CHANGE);
+      }
+      int16_t b = pendingBri;
+      if (b >= 0) {
+        pendingBri = -1;
+        bri = (uint8_t)b;
+        if (bri) briLast = bri;
+        stateUpdated(CALL_MODE_DIRECT_CHANGE);
+      }
+    }
 
     uint16_t getId() override { return USERMOD_ID_UNSPECIFIED; }
 };
