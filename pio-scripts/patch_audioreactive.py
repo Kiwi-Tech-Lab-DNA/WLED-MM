@@ -1,6 +1,7 @@
 Import("env")
 import os
 import json
+import shutil
 
 def patch_audioreactive_lib(source, target, env):
     """Patch the AudioReactive library.json to exclude .cpp from compilation"""
@@ -219,8 +220,68 @@ def inject_viz_gain(env):
         print(f"Warning: Could not inject NP_VIZ_GAIN into audio_reactive.h: {e}")
 
 
+# --- NP_VENDOR_LFX ----------------------------------------------------------------
+# The Mountain LedFx-look DSP (LFX_DSP, postProcessFFTResults, every LFX_* macro) is a
+# vendored hand-edit of the auto-fetched audioreactive lib — NOT upstream, NOT produced
+# by any WLED-MM script. A `pio` clean / `pkg update` / rm silently restores the stock
+# audio_reactive.h, reverting Mountain to the plain GEQ look AND leaving the three
+# injectors below (esp. NP_VIZ_GAIN) with no LFX anchors to patch. This step closes that
+# gap: it runs BEFORE the injectors and, on the appliance build only, drops the vendored
+# source-of-truth in when the libdeps copy is stock.
+#
+# Gated on USERMOD_ROOM_MIC_UPLOADER (board1 only) because the vendored file defines
+# LFX_DSP=1 unconditionally — copying it into any other env would change that env's look.
+# It NEVER overwrites a file that already has LFX_DSP (vendored or hand-edited), so a local
+# tweak to the libdeps copy survives until the next clean — back-port it to the vendored
+# file. Source of truth (override with the NP_VENDORED_AUDIOREACTIVE env var):
+#   <WLED-MM>/../nowplaying/firmware/board1/wled-mm/audio_reactive.h
+
+def _build_defines(env):
+    """Flatten this env's preprocessor defines to a set of names (CPPDEFINES + raw flags)."""
+    names = set()
+    for d in env.get("CPPDEFINES", []):
+        names.add(str(d[0]) if isinstance(d, (list, tuple)) else str(d))
+    # Belt-and-suspenders: CPPDEFINES isn't always populated from build_flags at pre-script
+    # time, so also scan the raw flag string.
+    flags = env.subst(" ".join(env.GetProjectOption("build_flags", []) or []))
+    for tok in flags.replace("-D", " ").split():
+        names.add(tok.split("=")[0])
+    return names
+
+
+def vendor_lfx_audioreactive(env):
+    """Restore the vendored LedFx-look audio_reactive.h when the appliance build finds stock."""
+    if "USERMOD_ROOM_MIC_UPLOADER" not in _build_defines(env):
+        return  # not the appliance build — leave other envs' audioreactive untouched
+
+    libdeps_dir = env.subst("$PROJECT_LIBDEPS_DIR/$PIOENV")
+    header_path = os.path.join(libdeps_dir, "wled-audioreactive", "audio_reactive.h")
+    if not os.path.exists(header_path):
+        return  # lib not fetched yet this pass; nothing to vendor over
+
+    with open(header_path, 'r') as f:
+        if "LFX_DSP" in f.read():
+            return  # already the LedFx-look file (vendored or hand-edited) — don't clobber
+
+    vendored = os.environ.get("NP_VENDORED_AUDIOREACTIVE") or os.path.join(
+        env.subst("$PROJECT_DIR"), "..", "nowplaying", "firmware", "board1", "wled-mm",
+        "audio_reactive.h")
+    vendored = os.path.normpath(vendored)
+    if not os.path.exists(vendored):
+        raise FileNotFoundError(
+            "NP: stock audio_reactive.h detected on the appliance build, but the vendored "
+            "LedFx-look source is missing at\n"
+            f"  {vendored}\n"
+            "Point NP_VENDORED_AUDIOREACTIVE at it (see nowplaying/firmware/board1/wled-mm/"
+            "README.md). Without it Board 1 builds the plain GEQ look, not Mountain.")
+
+    shutil.copyfile(vendored, header_path)
+    print(f"✓ Vendored LedFx-look audio_reactive.h over stock libdeps copy (from {vendored})")
+
+
 # Run immediately when script is loaded
 patch_audioreactive_lib(None, None, env)
+vendor_lfx_audioreactive(env)   # must precede the injectors — they patch on top of the LFX file
 inject_pcm_tap(env)
 keep_local_mic_on_hub75(env)
 inject_viz_gain(env)
