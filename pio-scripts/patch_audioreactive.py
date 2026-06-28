@@ -155,7 +155,72 @@ def keep_local_mic_on_hub75(env):
         print(f"Warning: Could not apply keep-local-mic patch: {e}")
 
 
+# --- NP_VIZ_GAIN ------------------------------------------------------------------
+# The Mountain equalizer renders from the custom LFX_DSP path (postProcessFFTResults),
+# which auto-normalizes each band against its own slow peak mean and so structurally
+# IGNORES WLED's inputLevel/sampleGain. To give the Board-1 "gain" knob a visible effect
+# we inject a runtime multiplier npVizGain (default 1.0 == unchanged look) into the LFX
+# output, applied just before the existing [0,1] clamp so >1 pushes bars toward saturation
+# (punchier) and <1 softens them. The knob (room_mic_uploader) drives npVizGain ~0..2x.
+#
+# Ownership: npVizGain is DEFINED in room_mic_uploader.h (always compiled). We only inject an
+# `extern` declaration (so the LFX code can name it) + the multiply. That split is deliberate:
+# if an upstream audioreactive bump drifts either anchor, the inject warns and skips, and the
+# worst case is the gain knob becomes a no-op — the symbol is still defined, so the link never
+# breaks. Guarded by USERMOD_ROOM_MIC_UPLOADER so other WLED-MM builds are byte-for-byte
+# unaffected, and marker-keyed so it's idempotent. To REVERT: delete this block + the
+# inject_viz_gain call below, and drop the usermod's npVizGain definition + write.
+
+NP_VIZ_GAIN_MARKER = "NP_VIZ_GAIN"
+
+NP_VIZ_GAIN_GLOBAL_ANCHOR = "#define LFX_OUT_GAIN        1.0f     // optional output trim\n"
+
+NP_VIZ_GAIN_GLOBAL = """#define LFX_OUT_GAIN        1.0f     // optional output trim
+#ifdef USERMOD_ROOM_MIC_UPLOADER
+extern float npVizGain;   // NP_VIZ_GAIN: Board-1 gain knob; DEFINED in room_mic_uploader.h, multiplied into the LFX output below
+#endif
+"""
+
+NP_VIZ_GAIN_MULT_ANCHOR = "      out *= LFX_OUT_GAIN;\n"
+
+NP_VIZ_GAIN_MULT = """      out *= LFX_OUT_GAIN;
+#ifdef USERMOD_ROOM_MIC_UPLOADER
+      out *= npVizGain;   // NP_VIZ_GAIN: Board-1 gain knob (applied before the [0,1] clamp below)
+#endif
+"""
+
+
+def inject_viz_gain(env):
+    """Inject the npVizGain runtime multiplier into the LFX_DSP output path."""
+    libdeps_dir = env.subst("$PROJECT_LIBDEPS_DIR/$PIOENV")
+    header_path = os.path.join(libdeps_dir, "wled-audioreactive", "audio_reactive.h")
+    if not os.path.exists(header_path):
+        return
+    try:
+        with open(header_path, 'r') as f:
+            src = f.read()
+
+        if NP_VIZ_GAIN_MARKER in src:
+            return  # already injected
+
+        if NP_VIZ_GAIN_GLOBAL_ANCHOR not in src or NP_VIZ_GAIN_MULT_ANCHOR not in src:
+            print("Warning: NP_VIZ_GAIN anchors not found in audio_reactive.h — "
+                  "audioreactive/LFX_DSP changed; viz-gain NOT injected (gain knob becomes a "
+                  "no-op, build still links since npVizGain is defined in the usermod).")
+            return
+
+        src = src.replace(NP_VIZ_GAIN_GLOBAL_ANCHOR, NP_VIZ_GAIN_GLOBAL, 1)
+        src = src.replace(NP_VIZ_GAIN_MULT_ANCHOR, NP_VIZ_GAIN_MULT, 1)
+
+        with open(header_path, 'w') as f:
+            f.write(src)
+        print("✓ Injected NP_VIZ_GAIN runtime multiplier into wled-audioreactive/audio_reactive.h")
+    except Exception as e:
+        print(f"Warning: Could not inject NP_VIZ_GAIN into audio_reactive.h: {e}")
+
+
 # Run immediately when script is loaded
 patch_audioreactive_lib(None, None, env)
 inject_pcm_tap(env)
 keep_local_mic_on_hub75(env)
+inject_viz_gain(env)
