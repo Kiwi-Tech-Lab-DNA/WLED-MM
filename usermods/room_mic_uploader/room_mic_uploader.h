@@ -7,6 +7,7 @@
 #include "uart_link.h"                    // b2-13 inter-board UART1 frame codec (shared with Board 2)
 #include <Wire.h>                         // b2-13 knobs: I2C bus for the Seesaw encoders
 #include "Adafruit_seesaw.h"              // b2-13 knobs: 3x Adafruit #5880 rotary encoders
+#include "np_lyrics.h"                    // P1: pure timing model + word font/color (host-tested)
 
 // room_mic_uploader — Board 1 cloud-ingest as a WLED-MM usermod.
 //
@@ -56,6 +57,15 @@ class RoomMicUploader : public Usermod {
     // cast to int16, so this threshold is tuned to THAT scaling (not the smoketest's >>13).
     // Logged every capture so it can be tuned on the bench; start permissive.
     static constexpr double RMS_GATE = 120.0;
+
+    // Silence->music onset — the "a new song started" trigger. While waiting out the cadence we
+    // cheaply probe the tap RMS; on a silent->loud edge we arm an ingest ONSET_SETTLE_MS later.
+    // The delay matters: ingesting at the instant of onset frames mostly the preceding silence
+    // (a ~10 s window with <1 s of music) and never recognizes — we wait for the window to fill
+    // with the NEW song first. This also catches the next track after any gap between songs.
+    static constexpr uint32_t ONSET_PROBE_MS  = 400;                          // RMS probe period while waiting
+    static constexpr uint32_t ONSET_SETTLE_MS = (CAPTURE_SECONDS + 1) * 1000; // window-fill delay before the onset ingest
+    static constexpr uint32_t ONSET_SAMPLES   = SAMPLE_RATE / 5;              // ~0.2 s probe window
 
     static constexpr const char *BOUNDARY = "----board1ingestBoundary7e3a";
 
@@ -142,6 +152,8 @@ class RoomMicUploader : public Usermod {
     // (same loose hand-off as Board 2's g_recheck_request).
     TaskHandle_t  uartTask       = nullptr;
     volatile bool recheckRequest = false;
+    // silence->music edge tracker for the onset trigger (ingest-task-local, no cross-task access)
+    bool roomWasSilent = true;
 
     // canonical 44-byte WAV header (RIFF/WAVE/fmt /data, no extra chunks) — byte-exact
     static void writeWavHeader(uint8_t *p, uint32_t pcmLen) {
@@ -202,6 +214,22 @@ class RoomMicUploader : public Usermod {
         if ((i & 0xFFFF) == 0) vTaskDelay(1);   // yield periodically (core-0 IDLE / watchdog)
       }
       return sqrt(sumSq / CAPTURE_SAMPLES);
+    }
+
+    // Cheap RMS over just the last ONSET_SAMPLES of the tap ring — light enough to call every
+    // poll while waiting (captureWindow() copies the whole 10 s window + writes `body`, far too
+    // heavy for that). A loose read of a ring the writer may be touching: fine for a gate estimate.
+    double quickRms() {
+      if (!npPcmRing) return -1.0;
+      uint32_t total = npPcmWritten;                 // volatile snapshot
+      if (total < ONSET_SAMPLES) return -1.0;
+      uint32_t startIdx = (total - ONSET_SAMPLES) % npPcmRingLen;
+      double sumSq = 0;
+      for (uint32_t i = 0; i < ONSET_SAMPLES; i++) {
+        int16_t s = npPcmRing[(startIdx + i) % npPcmRingLen];
+        sumSq += (double)s * (double)s;
+      }
+      return sqrt(sumSq / ONSET_SAMPLES);
     }
 
     // Multipart POST over a raw WiFiClient — WLED's build has no Arduino HTTPClient. The
@@ -271,22 +299,37 @@ class RoomMicUploader : public Usermod {
       USER_PRINTF("[ingest] POST %s -> %s | %s\n", NP_INGEST_PATH, resp, body);
     }
 
-    // Wait out CADENCE_MS, but break early (returning true) the moment Board 2 asks for a
-    // RE-CHECK. Polls in small steps with vTaskDelay so it both reacts fast and keeps core-0
-    // IDLE fed (the watchdog trap that bit this task before).
-    bool waitCadenceOrRecheck() {
-      uint32_t waited = 0;
+    enum Trigger { TRIG_CADENCE, TRIG_RECHECK, TRIG_ONSET };
+
+    // Wait until something says "ingest now": a Board 2 RE-CHECK, a silence->music ONSET (the
+    // room was quiet and music just came up — armed on the edge, fired ONSET_SETTLE_MS later once
+    // the capture window has filled with the new song), or the CADENCE_MS safety deadline. Polls
+    // in small steps so it reacts fast and keeps core-0 IDLE fed (the watchdog trap that bit it).
+    Trigger waitForTrigger() {
+      uint32_t waited = 0, sinceProbe = 0;
+      int32_t  onsetAt = -1;   // ms when a silence->music edge armed; ingest ONSET_SETTLE_MS later
       while (waited < CADENCE_MS) {
-        if (recheckRequest) { recheckRequest = false; return true; }
+        if (recheckRequest) { recheckRequest = false; return TRIG_RECHECK; }
+        if (onsetAt >= 0 && (int32_t)waited - onsetAt >= (int32_t)ONSET_SETTLE_MS) return TRIG_ONSET;
         vTaskDelay(pdMS_TO_TICKS(CADENCE_POLL_MS));
-        waited += CADENCE_POLL_MS;
+        waited += CADENCE_POLL_MS; sinceProbe += CADENCE_POLL_MS;
+        if (sinceProbe >= ONSET_PROBE_MS) {
+          sinceProbe = 0;
+          double rms = quickRms();
+          if (rms >= 0) {
+            bool loud = rms >= RMS_GATE;
+            if (loud && roomWasSilent && onsetAt < 0) onsetAt = (int32_t)waited;   // arm the onset ingest
+            roomWasSilent = !loud;
+          }
+        }
       }
-      return false;
+      return TRIG_CADENCE;
     }
 
     void run() {
       for (;;) {
-        bool forced = waitCadenceOrRecheck();   // forced == a Board 2 RE-CHECK tap
+        Trigger trig = waitForTrigger();
+        bool forced = (trig == TRIG_RECHECK);   // a Board 2 RE-CHECK tap: bypass the gate
         if (!ready) continue;
         if (!(WLED_CONNECTED)) {
           USER_PRINTLN(forced ? F("[ingest] RECHECK but wifi down — skip")
@@ -296,14 +339,15 @@ class RoomMicUploader : public Usermod {
 
         double rms = captureWindow();
         if (rms < 0) { USER_PRINTLN(F("[ingest] tap not ready / window short — skip")); continue; }
-        // A RE-CHECK is an explicit "listen now" from the user, so it bypasses the silence
-        // gate; the periodic capture still honours it to avoid POSTing a quiet room.
+        // A RE-CHECK is an explicit "listen now" from the user, so it bypasses the silence gate.
+        // CADENCE and ONSET still honour it to avoid POSTing a quiet room.
         if (!forced && rms < RMS_GATE) {
           USER_PRINTF("[ingest] room below gate (RMS %.0f < %.0f) — skip\n", rms, RMS_GATE);
           continue;
         }
-        if (forced) USER_PRINTF("[ingest] RECHECK -> forced ingest (RMS %.0f, gate bypassed) -> POST\n", rms);
-        else        USER_PRINTF("[ingest] captured %u samples  RMS %.0f  -> POST\n", (unsigned)CAPTURE_SAMPLES, rms);
+        const char *why = forced ? "RECHECK (gate bypassed)"
+                        : (trig == TRIG_ONSET ? "ONSET (music started)" : "cadence");
+        USER_PRINTF("[ingest] %s  RMS %.0f  -> POST\n", why, rms);
         postIngest();
       }
     }
@@ -361,10 +405,21 @@ class RoomMicUploader : public Usermod {
           knobPos[i] = pos;
           int16_t level;
           if (i == 0) {                  // mode: step one look per detent, wrapping
-            int cur = presetIndexOf(currentPreset);       // re-sync to the LIVE preset first, so an
-            if (cur >= 0) modeIdx = (uint8_t)cur;          // external change / press-home can't desync us
-            modeIdx = (uint8_t)((modeIdx + presetN + (delta > 0 ? 1 : -1)) % presetN);
-            pendingPreset = slots[modeIdx];               // applyPreset() runs in loop()
+            // The cycle is the presetN looks PLUS a trailing virtual LYRICS entry (index
+            // presetN). Re-sync to the live state first so an external change / press-home
+            // can't desync us: lyrics mode pins to its own index (currentPreset is the
+            // underlay = home), otherwise track the live preset.
+            uint8_t modeN = presetN + 1;
+            if (lyricsActive) modeIdx = presetN;
+            else { int cur = presetIndexOf(currentPreset); if (cur >= 0) modeIdx = (uint8_t)cur; }
+            modeIdx = (uint8_t)((modeIdx + modeN + (delta > 0 ? 1 : -1)) % modeN);
+            if (modeIdx == presetN) {                     // landed on LYRICS
+              lyricsActive = true;
+              pendingPreset = slots[0];                   // run Mountain underneath the words
+            } else {
+              lyricsActive = false;
+              pendingPreset = slots[modeIdx];             // applyPreset() runs in loop()
+            }
             level = modeIdx;                              // toast: 0-based mode number (not the raw slot id)
           } else if (i == 1) {           // bright -> WLED brightness, nudged from LIVE bri (no stale mirror)
             int16_t newBri = clampU8(bri + delta * BRIGHT_STEP);
@@ -386,6 +441,7 @@ class RoomMicUploader : public Usermod {
           int16_t level;
           if (i == 0) {                  // mode press = jump home (Mountain; clock face not ported yet)
             modeIdx = 0;
+            lyricsActive = false;        // leave lyrics mode on press-home
             pendingPreset = slots[0];
             level = modeIdx;
           } else {                       // bright/gain press = no local action, just the toast cue
@@ -440,6 +496,209 @@ class RoomMicUploader : public Usermod {
 
     static void uartTrampoline(void *arg) { static_cast<RoomMicUploader *>(arg)->runUart(); }
 
+    // ======================== Lyrics mode data path (P2) ========================
+    // When the mode knob selects the LYRICS entry, this task polls GET /nowplaying,
+    // fetches GET /lyrics?track_id= once per track, and keeps a re-anchored play
+    // position so currentWord() (read per-frame by the P3 overlay draw on core 1)
+    // can pick the word to flash. The timeline is double-buffered: the task builds
+    // into the idle slot and publishes by flipping `liveSlot` (a single volatile
+    // write), so a core-1 reader never iterates a vector mid-rebuild. Rebuilds only
+    // happen on a track change (seconds apart) while a draw frame is microseconds —
+    // two rebuilds would have to land inside one frame to race, which can't happen.
+    static constexpr const char *NP_NOWPLAYING_PATH = "/api/nowplaying";
+    static constexpr uint32_t LYRICS_POLL_MS = 2000;   // re-anchor cadence; words extrapolate between
+    static constexpr size_t   LYRICS_NETCAP  = 16384;  // ponytail: response scratch ceiling; bump if a
+                                                       // song's yrc exceeds ~16 KB (then the body truncates)
+    // Timing lead (ms) added to the anchored position so words show ahead of where the raw
+    // anchor would put them. Half the measured GET round-trip is added automatically (the
+    // server computes position_s mid-round-trip; the board anchors at receipt → lag). This is
+    // the BENCH CALIBRATION KNOB for the residual systematic offset (recognition-pipeline
+    // position vs true playback): +ve = words earlier. Tune on hardware to taste.
+    static constexpr int32_t  LYRICS_LEAD_MS = 0;
+
+    TaskHandle_t  lyricsTask   = nullptr;
+    volatile bool lyricsActive = false;   // set by the mode knob (uartTask); read here + by the draw
+
+    char *netBuf = nullptr;               // PSRAM HTTP response scratch (reused per GET)
+
+    // re-anchor model: playPos at the moment `anchorAt` millis() was taken. The estimate
+    // is anchorPos + (millis()-anchorAt)/1000 — corrected to the server value every poll.
+    volatile double   anchorPos = 0.0;
+    volatile uint32_t anchorAt  = 0;
+    volatile bool     haveAnchor = false;
+
+    std::string curTrack;                 // track_id the timeline was built for ("" = none)
+    double      curDur     = -1.0;
+    bool        lyricsFetched = false;    // fetched /lyrics for curTrack already (don't re-hammer)
+
+    nplyrics::Timeline   slot[2];
+    std::vector<double>  slotStarts[2];
+    volatile int         liveSlot = -1;   // -1 = no timeline; else index into slot[]
+
+    static std::string urlencode(const std::string &s) {
+      static const char *hex = "0123456789ABCDEF";
+      std::string o;
+      for (unsigned char c : s) {
+        if (isalnum(c) || c=='-' || c=='_' || c=='.' || c=='~') o += (char)c;
+        else { o += '%'; o += hex[c>>4]; o += hex[c&15]; }
+      }
+      return o;
+    }
+
+    // GET `path` with the shared bearer token into netBuf; return a pointer to the
+    // (null-terminated, writable) response body for zero-copy JSON parse, or nullptr.
+    // Same non-blocking read discipline as postIngest() so it can't starve core-0 IDLE.
+    char *httpGet(const char *path) {
+      if (!netBuf) return nullptr;
+      WiFiClient client;
+      client.setTimeout(4000);
+      if (!client.connect(NP_HOST, NP_PORT)) { USER_PRINTF("[lyrics] connect %s:%d failed\n", NP_HOST, (int)NP_PORT); return nullptr; }
+      client.printf("GET %s HTTP/1.1\r\n", path);
+      client.printf("Host: %s:%d\r\n", NP_HOST, (int)NP_PORT);
+      client.printf("Authorization: Bearer %s\r\n", NP_DEVICE_TOKEN);
+      client.print(F("Connection: close\r\n\r\n"));
+
+      // Read until the server closes AND the buffer is drained. The cloud sends
+      // `Connection: close` with NO Content-Length, so the body is delimited only by
+      // EOF — and /nowplaying (with the recent[] mosaic) spans several TCP segments.
+      // Looping while (connected || available) avoids breaking in a mid-transfer gap
+      // where available()==0 but more data is still in flight (that truncated the JSON
+      // → IncompleteInput). t0 resets on every byte, so the 8 s cap only trips on a
+      // genuinely stalled server (single-threaded artisan busy with an ingest).
+      size_t rlen = 0;
+      uint32_t t0 = millis();
+      while ((client.connected() || client.available()) && millis() - t0 < 8000) {
+        int avail = client.available();
+        if (avail > 0) {
+          size_t room = LYRICS_NETCAP - 1 - rlen;
+          if (room == 0) { client.read(); t0 = millis(); }  // body > netCap: drain & discard (truncated)
+          else {
+            int n = client.read((uint8_t*)netBuf + rlen, avail < (int)room ? avail : (int)room);
+            if (n > 0) { rlen += n; t0 = millis(); }
+          }
+        } else {
+          vTaskDelay(pdMS_TO_TICKS(5));
+        }
+      }
+      client.stop();
+      netBuf[rlen] = '\0';
+
+      char *hdrEnd = strstr(netBuf, "\r\n\r\n");
+      if (!hdrEnd) return nullptr;
+      *hdrEnd = '\0';
+      if (!strstr(netBuf, " 200 ")) {                       // non-200: log status line, skip
+        USER_PRINTF("[lyrics] GET %s -> %s\n", path, netBuf);
+        return nullptr;
+      }
+      return hdrEnd + 4;
+    }
+
+    // Build into the idle slot, then publish by flipping liveSlot (single write).
+    void publishTimeline(nplyrics::Timeline tl) {
+      int next = (liveSlot == 0) ? 1 : 0;
+      slot[next] = std::move(tl);
+      slotStarts[next] = nplyrics::starts_of(slot[next]);
+      liveSlot = next;
+    }
+
+    void resetLyrics() {
+      curTrack.clear(); curDur = -1.0; lyricsFetched = false;
+      haveAnchor = false; liveSlot = -1;
+    }
+
+    void fetchLyrics(const std::string &trackId, double dur) {
+      std::string path = "/api/lyrics?track_id=" + urlencode(trackId);
+      char *body = httpGet(path.c_str());
+      if (!body) return;
+      // zero-copy parse: the lyrics string references netBuf, valid until the next GET.
+      StaticJsonDocument<256> doc;
+      if (deserializeJson(doc, body)) return;
+      if (doc["pending"] | false) return;                   // worker still in flight → retry next poll
+      lyricsFetched = true;                                  // present row (even null lyrics) → stop asking
+      const char *lyr = doc["lyrics"] | "";
+      if (!lyr || !*lyr) { publishTimeline(nplyrics::Timeline()); return; }   // track has no lyrics
+      publishTimeline(nplyrics::build_timeline(lyr, dur > 0 ? dur : -1.0));
+      USER_PRINTF("[lyrics] built timeline: %u words for track %s\n",
+                  (unsigned)slot[liveSlot].size(), trackId.c_str());
+    }
+
+    void pollNowPlaying() {
+      uint32_t tReq = millis();
+      char *body = httpGet(NP_NOWPLAYING_PATH);
+      uint32_t rtt = millis() - tReq;            // GET round-trip, for latency compensation
+      if (!body) return;
+      // /nowplaying's trailing recent[] mosaic is ~16 KB (63 tiles of long cover URLs) and
+      // overflows netBuf → truncated JSON. Every field we need precedes it, so lop recent[]
+      // off and re-close the object: a small, valid prefix that's robust to the mosaic growing.
+      char *rec = strstr(body, ",\"recent\"");
+      if (rec) { rec[0] = '}'; rec[1] = '\0'; }
+      StaticJsonDocument<192> filter;
+      filter["state"] = true; filter["track_id"] = true; filter["position_s"] = true;
+      filter["duration_s"] = true; filter["lyrics_available"] = true;
+      StaticJsonDocument<320> doc;
+      if (deserializeJson(doc, body, DeserializationOption::Filter(filter))) return;
+
+      bool playing = strcmp(doc["state"] | "", "playing") == 0;
+      std::string trackId = (const char*)(doc["track_id"] | "");
+      if (!playing || trackId.empty()) { if (!curTrack.empty()) resetLyrics(); return; }
+
+      double posS = doc["position_s"] | -1.0;
+      double durS = doc["duration_s"] | -1.0;
+      bool   lyrAvail = doc["lyrics_available"] | false;
+
+      // re-anchor each poll, compensating GET latency: position_s was computed ~mid-round-trip,
+      // so the true position at receipt is posS + rtt/2 (+ the bench LEAD for residual offset).
+      if (posS >= 0) {
+        anchorPos  = posS + (rtt / 2.0 + LYRICS_LEAD_MS) / 1000.0;
+        anchorAt   = millis();
+        haveAnchor = true;
+      }
+
+      if (trackId != curTrack) {                            // new song: drop old words, refetch
+        curTrack = trackId; curDur = durS; lyricsFetched = false;
+        publishTimeline(nplyrics::Timeline());
+      }
+      if (lyrAvail && !lyricsFetched) fetchLyrics(trackId, durS);
+    }
+
+    // The word to flash right now, or nullptr in a gap / when inactive. Pure read of the
+    // published slot + anchor; safe to call from the core-1 draw path (see publish note).
+    const std::string *currentWord() {
+      if (!lyricsActive || !haveAnchor) return nullptr;
+      int s = liveSlot;
+      if (s < 0) return nullptr;
+      double pos = anchorPos + (double)(millis() - anchorAt) / 1000.0;
+      return nplyrics::word_at(slot[s], pos, slotStarts[s]);
+    }
+
+    void runLyrics() {
+      const std::string *lastLogged = nullptr;
+      bool wasActive = false;
+      for (;;) {
+        if (lyricsActive && (WLED_CONNECTED)) {
+          pollNowPlaying();
+          // P2 verification hook: log word changes over serial (P3 replaces this with the
+          // panel draw). Cheap and only while lyrics mode is the active look.
+          uint32_t t0 = millis();
+          while (lyricsActive && millis() - t0 < LYRICS_POLL_MS) {
+            const std::string *w = currentWord();
+            if (w != lastLogged && !(w && lastLogged && *w == *lastLogged)) {
+              double pos = haveAnchor ? anchorPos + (double)(millis() - anchorAt) / 1000.0 : -1.0;
+              USER_PRINTF("[lyrics] %.1fs  %s\n", pos, w ? w->c_str() : "(gap)");
+              lastLogged = w;
+            }
+            vTaskDelay(pdMS_TO_TICKS(60));
+          }
+          wasActive = true;
+        } else {
+          if (wasActive) { resetLyrics(); lastLogged = nullptr; wasActive = false; }
+          vTaskDelay(pdMS_TO_TICKS(200));
+        }
+      }
+    }
+
+    static void lyricsTrampoline(void *arg) { static_cast<RoomMicUploader *>(arg)->runLyrics(); }
+
   public:
     void setup() override {
       // The inter-board UART link comes up first and independently of the (large) multipart
@@ -453,6 +712,13 @@ class RoomMicUploader : public Usermod {
       xTaskCreatePinnedToCore(taskTrampoline, "npIngest", 12288, this, 1, &ingestTask, 0);
       USER_PRINTF("[ingest] room_mic_uploader up (body %u B, window %us @ %u Hz, cadence %ums)\n",
                    (unsigned)bodyTotal, (unsigned)CAPTURE_SECONDS, (unsigned)SAMPLE_RATE, (unsigned)CADENCE_MS);
+
+      // Lyrics-mode data path (P2): its own task + PSRAM response scratch, so the /nowplaying
+      // poll + /lyrics fetch never blocks ingest or the render loop. No buffer => lyrics no-op.
+      netBuf = (char *)heap_caps_malloc(LYRICS_NETCAP, MALLOC_CAP_SPIRAM);
+      if (!netBuf) netBuf = (char *)malloc(LYRICS_NETCAP);
+      if (netBuf) xTaskCreatePinnedToCore(lyricsTrampoline, "npLyrics", 8192, this, 1, &lyricsTask, 0);
+      else USER_PRINTLN(F("[lyrics] OOM: response buffer — lyrics mode disabled"));
     }
 
     // Drain knob requests marshalled from the uartTask (core 0). bri+stateUpdated() and
@@ -473,6 +739,50 @@ class RoomMicUploader : public Usermod {
         bri = (uint8_t)b;
         if (bri) briLast = bri;
         stateUpdated(CALL_MODE_DIRECT_CHANGE);
+      }
+    }
+
+    // P3: lyrics overlay. Called after effects, before show() — when a word is playing we
+    // black out the panel and paint the word on top (covering the equalizer); in a gap or a
+    // track with no synced lyrics we draw nothing, so the running effect shows through (the
+    // no-lyrics spectrum fallback, for free — the in-gap Lyric Ribbon is P4). Ports np_lyrics
+    // render(): same glyphs/layout/word_color, drawn with strip.setPixelColorXY. Global
+    // brightness still folds in at show(), so the bright knob keeps working.
+    void handleOverlayDraw() override {
+      if (!lyricsActive || !strip.isMatrix) return;
+      const std::string *wp = currentWord();
+      if (!wp) return;
+      const int W = Segment::maxWidth, H = Segment::maxHeight;
+      if (W <= 0 || H <= 0) return;
+      std::vector<const nplyrics::Glyph*> gs = nplyrics::glyphs(*wp);
+      if (gs.empty()) return;   // word has no drawable glyphs → treat as a gap
+
+      for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++) strip.setPixelColorXY(x, y, (uint32_t)0);   // cover the effect
+
+      nplyrics::Layout L = nplyrics::layout(gs, W, H);
+      nplyrics::RGB c = nplyrics::word_color(*wp);
+      uint32_t col = RGBW32((uint8_t)(c.r*255.0f+0.5f), (uint8_t)(c.g*255.0f+0.5f),
+                            (uint8_t)(c.b*255.0f+0.5f), 0);
+      int cx = L.x0;
+      for (size_t gi = 0; gi < gs.size(); gi++) {
+        const nplyrics::Glyph *g = gs[gi];
+        int gw = nplyrics::glyph_w(g);
+        for (int ry = 0; ry < nplyrics::GLYPH_H; ry++) {
+          const char *bits = g->rows[ry];
+          for (int rx = 0; rx < gw; rx++) {
+            if (bits[rx] != '1') continue;
+            for (int dy = 0; dy < L.scale; dy++) {
+              int py = L.y0 + ry*L.scale + dy;
+              if (py < 0 || py >= H) continue;
+              for (int dx = 0; dx < L.scale; dx++) {
+                int px = cx + rx*L.scale + dx;
+                if (px >= 0 && px < W) strip.setPixelColorXY(px, py, col);
+              }
+            }
+          }
+        }
+        cx += (gw + nplyrics::CHAR_GAP) * L.scale;
       }
     }
 
