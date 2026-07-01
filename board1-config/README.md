@@ -63,6 +63,10 @@ relative to its own path and falls back to `$KEYBEAT_DIR` if your checkout diffe
 ## Files
 
 - `provision-board1.sh` — one-shot post-flash provisioning (idempotent; safe to re-run).
+- `npcycle-default.json` — the mode-knob cycle order (`{"cycle":[slot ids],"lyrics":bool}`),
+  seeded to `/npcycle.json` on LittleFS. The `room_mic_uploader` firmware reads it at boot and
+  the web preset-manager rewrites it live (`POST /json/state {"npcycle":{…}}`) — reorder looks
+  with no reflash. Missing/invalid → the firmware's compiled default stands (real safety net).
 - `board1-cfg-reference.json` — a full `GET /json/cfg` snapshot of a known-good board, for
   reference / diffing. Safe to commit: WLED redacts passwords from `/json/cfg` (only
   `pskl` *lengths* appear), and the device token is not stored in WLED config.

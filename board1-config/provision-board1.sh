@@ -123,6 +123,15 @@ else
   echo "        else the panel boots blank (no preset 3 to load)."
 fi
 
+# Seed the mode-knob cycle order. The firmware falls back to a compiled default if this file
+# is missing, so this is a nicety (keeps the web preset-manager's "cycle order" panel populated
+# from first boot). After provisioning, reorder from the web app — no reflash.
+NPCYCLE="$(dirname "$0")/npcycle-default.json"
+if [ -f "${NPCYCLE}" ]; then
+  curl -s -m 15 -F "data=@${NPCYCLE};filename=/npcycle.json" "${BASE}/edit" >/dev/null \
+    && echo "  uploaded /npcycle.json (mode-knob cycle order)" || echo "  FAILED /npcycle.json"
+fi
+
 say "default state: on, moderate brightness"
 curl -s -m 6 -X POST "${BASE}/json/state" -H 'Content-Type: application/json' \
   -d '{"on":true,"bri":140}' >/dev/null

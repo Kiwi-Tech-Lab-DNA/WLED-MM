@@ -122,22 +122,81 @@ class RoomMicUploader : public Usermod {
     volatile int16_t pendingBri    = -1;   // 0..255 brightness to apply
     volatile int16_t pendingPreset = -1;   // preset slot to apply
 
+    // The knob's mode-cycle order, now a RUNTIME value read from /npcycle.json (web app writes
+    // it; see readFromJsonState) instead of a compiled constant — reorder looks with no reflash.
+    // Plain fixed-cap member array, NOT std::vector / NOT static constexpr: a static-constexpr
+    // array member ODR-fails to link in this header-only usermod under gnu++11 (same trap the
+    // knob ADDR/NAME tables dodge). Single writer (core 1: loadCycle/readFromJsonState) + single
+    // reader (core 0: pollKnobs); cycleCount is published LAST so a reader never sees a count that
+    // outruns the slots (the same lock-free discipline as pendingPreset). Default = the old hardcode.
+    static constexpr uint8_t CYCLE_MAX = 16;
+    uint8_t          cycleSlots[CYCLE_MAX] = {3, 10, 11, 12, 13, 14, 15};
+    volatile uint8_t cycleCount            = 7;      // WRITE LAST
+    bool             cycleLyrics           = true;   // append the virtual Lyrics entry?
+
     static int16_t clampU8(int32_t v) { return v < 0 ? 0 : (v > 255 ? 255 : (int16_t)v); }
 
-    // The looks the mode knob cycles: Mountain (boot/home) + the six Keybeat GIFs. These slots
-    // are uploaded to board flash by board1-config/provision-board1.sh (they live in flash, not
-    // the repo — see appliance-reproducibility). Local static, returned by pointer: a
-    // static-constexpr array MEMBER ODR-fails to link in a header-only usermod (gnu++11).
-    static const uint8_t *presetSlots(uint8_t &count) {
-      static const uint8_t SLOTS[] = {3, 10, 11, 12, 13, 14, 15};
-      count = (uint8_t)(sizeof(SLOTS) / sizeof(SLOTS[0]));
-      return SLOTS;
+    // The looks the mode knob cycles: default Mountain (boot/home) + the six Keybeat GIFs, but the
+    // live order comes from cycleSlots/cycleCount (loaded from /npcycle.json). These preset slots
+    // are uploaded to board flash by board1-config/provision-board1.sh (they live in flash, not the
+    // repo — see appliance-reproducibility). cycleCount is clamped to >=1 so the pollKnobs wrap
+    // math (modulo modeN) can never divide by zero even if a bad file somehow zeroed the count.
+    const uint8_t *presetSlots(uint8_t &count) {
+      count = cycleCount ? cycleCount : 1;
+      return cycleSlots;
     }
     // Index of `slot` within presetSlots(), or -1 if it isn't one of ours.
-    static int presetIndexOf(uint8_t slot) {
+    int presetIndexOf(uint8_t slot) {
       uint8_t n; const uint8_t *s = presetSlots(n);
       for (uint8_t i = 0; i < n; i++) if (s[i] == slot) return i;
       return -1;
+    }
+
+    // Validate + apply a {"cycle":[...],"lyrics":bool} object into the live cycle store. Rejects
+    // the WHOLE update on any bad slot (out of 1..250) or an empty/oversize list, leaving the prior
+    // order intact — a malformed write can never brick the knob. Publishes cycleCount LAST.
+    bool applyCycleDoc(JsonObjectConst o) {
+      if (o.isNull()) return false;
+      JsonArrayConst arr = o["cycle"];
+      if (arr.isNull()) return false;
+      uint8_t tmp[CYCLE_MAX], n = 0;
+      for (JsonVariantConst v : arr) {
+        if (n >= CYCLE_MAX) break;                 // silently cap at CYCLE_MAX
+        int s = v | -1;
+        if (s < 1 || s > 250) return false;        // invalid slot → reject whole update
+        tmp[n++] = (uint8_t)s;
+      }
+      if (n < 1) return false;                     // empty cycle → reject
+      memcpy(cycleSlots, tmp, n);
+      cycleLyrics = o["lyrics"] | true;
+      cycleCount  = n;                             // publish LAST
+      return true;
+    }
+
+    // Persist the live cycle store to /npcycle.json on LittleFS (so it survives reboot).
+    void persistCycle() {
+      File f = WLED_FS.open("/npcycle.json", "w");
+      if (!f) return;
+      StaticJsonDocument<512> doc;
+      JsonArray arr = doc.createNestedArray("cycle");
+      for (uint8_t i = 0; i < cycleCount; i++) arr.add(cycleSlots[i]);
+      doc["lyrics"] = cycleLyrics;
+      serializeJson(doc, f);
+      f.close();
+    }
+
+    // Load the cycle order from /npcycle.json at boot. Missing/invalid file => keep the compiled
+    // default (the real safety net). Runs on core 1 in setup() before the knob task starts.
+    void loadCycle() {
+      File f = WLED_FS.open("/npcycle.json", "r");
+      if (!f) return;
+      StaticJsonDocument<512> doc;
+      DeserializationError err = deserializeJson(doc, f);
+      f.close();
+      if (err) return;
+      if (applyCycleDoc(doc.as<JsonObjectConst>()))
+        USER_PRINTF("[cycle] loaded %u slot(s) from /npcycle.json (lyrics=%d)\n",
+                    (unsigned)cycleCount, (int)cycleLyrics);
     }
 
     // one PSRAM buffer holding the whole multipart body: [preamble][44B WAV][PCM][epilogue]
@@ -409,8 +468,8 @@ class RoomMicUploader : public Usermod {
             // presetN). Re-sync to the live state first so an external change / press-home
             // can't desync us: lyrics mode pins to its own index (currentPreset is the
             // underlay = home), otherwise track the live preset.
-            uint8_t modeN = presetN + 1;
-            if (lyricsActive) modeIdx = presetN;
+            uint8_t modeN = presetN + (cycleLyrics ? 1 : 0);
+            if (lyricsActive && cycleLyrics) modeIdx = presetN;
             else { int cur = presetIndexOf(currentPreset); if (cur >= 0) modeIdx = (uint8_t)cur; }
             modeIdx = (uint8_t)((modeIdx + modeN + (delta > 0 ? 1 : -1)) % modeN);
             if (modeIdx == presetN) {                     // landed on LYRICS
@@ -701,6 +760,11 @@ class RoomMicUploader : public Usermod {
 
   public:
     void setup() override {
+      // Load the knob cycle order from /npcycle.json BEFORE the knob task starts (it reads
+      // cycleSlots/cycleCount). Missing/invalid => the compiled default stands. FS is mounted
+      // by now (usermod setup() runs late in WLED boot).
+      loadCycle();
+
       // The inter-board UART link comes up first and independently of the (large) multipart
       // body: the heartbeat + RE-CHECK path must work even if the ingest buffer fails to alloc.
       xTaskCreatePinnedToCore(uartTrampoline, "npUart", 4096, this, 1, &uartTask, 0);
@@ -740,6 +804,21 @@ class RoomMicUploader : public Usermod {
         if (bri) briLast = bri;
         stateUpdated(CALL_MODE_DIRECT_CHANGE);
       }
+    }
+
+    // The web preset-manager POSTs {"npcycle":{"cycle":[...],"lyrics":bool}} to /json/state to
+    // set the knob cycle order live. deserializeState() fans this out to every usermod (core 1,
+    // before it applies ps/psave), so we validate + apply it into the live store AND persist it —
+    // reorder takes effect immediately with no reboot and survives the next boot. Any other JSON
+    // state (a preset load, a color change) has no "npcycle" key and we no-op.
+    void readFromJsonState(JsonObject& root) override {
+      JsonObjectConst np = root["npcycle"];
+      if (np.isNull()) return;
+      if (!applyCycleDoc(np)) { USER_PRINTLN(F("[cycle] rejected bad npcycle update")); return; }
+      persistCycle();
+      int idx = presetIndexOf(currentPreset);      // re-anchor the knob index to the live look
+      if (idx >= 0) modeIdx = (uint8_t)idx;
+      USER_PRINTF("[cycle] set live: %u slot(s), lyrics=%d\n", (unsigned)cycleCount, (int)cycleLyrics);
     }
 
     // P3: lyrics overlay. Called after effects, before show() — when a word is playing we
