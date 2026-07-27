@@ -5,9 +5,49 @@
 #include "esp_heap_caps.h"
 #include "room_mic_uploader_secrets.h"   // NP_BASE_URL + NP_DEVICE_TOKEN (gitignored)
 #include "uart_link.h"                    // b2-13 inter-board UART1 frame codec (shared with Board 2)
-#include <Wire.h>                         // b2-13 knobs: I2C bus for the Seesaw encoders
-#include "Adafruit_seesaw.h"              // b2-13 knobs: 3x Adafruit #5880 rotary encoders
 #include "np_lyrics.h"                    // P1: pure timing model + word font/color (host-tested)
+#include "np_encoder.h"                   // b2-13 knobs: pure quadrature decode (host-tested)
+
+// --- b2-13 knobs: 3 bare EC11 quadrature encoders (Seesaw #5880 dropped 2026-07-19) ---
+// Bare EC11s replace the I2C Seesaws: production-bom.md cost lever #1 (~$15/unit), and
+// dropping I2C frees GPIO 47/48 — exactly the pair three encoders need. Rig + wiring in
+// nowplaying-project/docs/breadboard-bringup.md.
+//
+// The Seesaw counted detents IN HARDWARE, so poll rate never mattered. We decode quadrature
+// ourselves now, and that decode runs in a PIN-CHANGE ISR rather than the uartTask poll: that
+// task ticks at 10 ms while a brisk spin emits transitions far faster, so polling the raw pins
+// would silently drop counts AND mis-read direction. The ISR keeps the same "accumulated
+// position" contract pollKnobs() already consumed from getEncoderPosition(), so the consumer
+// logic is untouched.
+struct NpEncoder {
+  int8_t           pinA, pinB;
+  volatile int32_t pos;   // detents, signed — the getEncoderPosition() replacement
+  volatile int8_t  sub;   // quadrature transitions since the last emitted detent
+  volatile uint8_t prev;  // last (A<<1|B) state
+};
+// Index order matches the protocol knob id: 0=mode, 1=bright, 2=gain.
+static NpEncoder npEnc[3] = {
+  { 47, 48, 0, 0, 0 },   // mode   — the pair freed by dropping the Seesaws
+  {  1, 12, 0, 0, 0 },   // bright
+  { 41, 42, 0, 0, 0 },   // gain
+};
+
+// CALIBRATION KNOB. Quadrature transitions per physical detent. EC11 batches vary (1, 2 or 4,
+// depending where the detent sits in the cycle), so one click may otherwise step 4 modes.
+// Tune against the encoders actually on the bench: if one click steps N looks, scale this by N.
+// 4 = the common full-cycle-per-detent case.
+static constexpr int8_t NP_ENC_DETENT = 4;
+
+static void IRAM_ATTR npEncIsr(void *arg) {
+  NpEncoder *e = (NpEncoder *)arg;
+  uint8_t cur  = (uint8_t)((digitalRead(e->pinA) << 1) | digitalRead(e->pinB));
+  uint8_t prev = e->prev;                // volatile -> locals for npEncStep's in/out params
+  int8_t  sub  = e->sub;
+  int8_t  d    = npEncStep(cur, &prev, &sub, NP_ENC_DETENT);
+  e->prev = prev;
+  e->sub  = sub;
+  e->pos += d;
+}
 
 // room_mic_uploader — Board 1 cloud-ingest as a WLED-MM usermod.
 //
@@ -82,30 +122,26 @@ class RoomMicUploader : public Usermod {
     // instead of waiting out the full CADENCE_MS.
     static constexpr uint32_t CADENCE_POLL_MS = 100;
 
-    // --- b2-13 knobs: 3 Seesaw rotary encoders (the toast source for Board 2) ---
-    // I2C on Wire1 = SDA47/SCL48 (WLED's primary Wire is 42/41 — a separate bus, no collision).
-    // Read inside the UART task (it already owns Serial1, so one writer emits the KNOB_EVENT).
-    // value sent = the encoder's accumulated position; flags bit0 = the encoder push switch.
-    // Index order matches the protocol knob id (0=mode,1=bright,2=gain). Bench-verified pins +
-    // addresses from firmware/board1-smoketest/src/knob_test.cpp (turn+press, 2026-06-23).
-    static constexpr int8_t   KNOB_SDA   = 47;
-    static constexpr int8_t   KNOB_SCL   = 48;
-    static constexpr uint8_t  KNOB_SW    = 24;   // seesaw pin of the encoder's push switch
-    static constexpr uint32_t KNOB_POLL_MS = 20; // ~50 Hz: snappy without hammering the I2C bus
+    // --- b2-13 knobs: 3 bare EC11 encoders (the toast source for Board 2) ---
+    // Pins + the quadrature ISR live at file scope above (npEnc / npEncIsr). Read inside the
+    // UART task (it already owns Serial1, so one writer emits the KNOB_EVENT). value sent = the
+    // encoder's accumulated position; flags bit0 = the push switch. Index order matches the
+    // protocol knob id (0=mode,1=bright,2=gain).
+    static constexpr uint32_t KNOB_POLL_MS = 20; // ~50 Hz: only DRAINS the ISR counter, so this
+                                                 // rate sets responsiveness, never accuracy
     static constexpr uint8_t  KNOB_N     = 3;
-    // b2-13 local apply: target units moved per raw encoder count (bench-tunable). The #5880
-    // reports a few counts per detent, so this scales a knob turn onto the 0..255 ranges.
-    static constexpr int16_t  BRIGHT_STEP = 6;   // bri units per encoder count
-    static constexpr int16_t  GAIN_STEP   = 6;   // viz-punch level units per encoder count
+    // b2-13 local apply: target units moved per detent (bench-tunable). The ISR emits one count
+    // per physical detent (see NP_ENC_DETENT), so this scales a click onto the 0..255 ranges.
+    static constexpr int16_t  BRIGHT_STEP = 6;   // bri units per detent
+    static constexpr int16_t  GAIN_STEP   = 6;   // viz-punch level units per detent
     static constexpr float    GAIN_MIN    = 0.1f; // npVizGain floor: never fully zero the bars (a flat,
                                                   // frozen equalizer reads as "hung", not "low gain")
-    // The per-knob address / protocol-id / name tables (index-aligned to the protocol knob id:
-    // 0=mode 0x37, 1=bright 0x36, 2=gain 0x38) live as local statics in knobsBegin/pollKnobs —
-    // gnu++11 ODR-uses a static-constexpr array member, which needs an out-of-line def a
-    // header-only usermod can't give. Scalars above are fine (used only as constant exprs).
+    // The per-knob switch-pin / protocol-id / name tables (index-aligned to the protocol knob id)
+    // live as local statics in knobsBegin/pollKnobs — gnu++11 ODR-uses a static-constexpr array
+    // member, which needs an out-of-line def a header-only usermod can't give. Scalars above are
+    // fine (used only as constant exprs).
 
-    Adafruit_seesaw *knob[KNOB_N]  = {nullptr, nullptr, nullptr};
-    int32_t  knobPos[KNOB_N]       = {0, 0, 0};   // raw encoder position (signed, for delta)
+    int32_t  knobPos[KNOB_N]       = {0, 0, 0};   // last drained ISR position (signed, for delta)
     bool     knobPressed[KNOB_N]   = {false, false, false};
 
     // b2-13 local knob apply: the knobs now DRIVE the Board-1 visualizer, not just the toast.
@@ -413,32 +449,36 @@ class RoomMicUploader : public Usermod {
 
     static void taskTrampoline(void *arg) { static_cast<RoomMicUploader *>(arg)->run(); }
 
-    // b2-13 knobs: bring up Wire1 + attach whichever Seesaw encoders answer. Safe if some/all
-    // are absent — a missing encoder is logged and simply never emits. Called once from the
-    // UART task so all I2C lives on that one task (no cross-task Wire1 access).
+    // b2-13 knobs: arm the EC11 pins + their quadrature ISRs. Unlike the Seesaw version there
+    // is nothing to probe for — a disconnected encoder simply never emits. Called once from the
+    // UART task, which is also the only place the counters are drained.
     void knobsBegin() {
-      static const uint8_t      ADDR[KNOB_N] = {0x37, 0x36, 0x38};
+      static const int8_t       SW[KNOB_N]   = {2, -1, -1};   // see the GPIO 2 note below
       static const char * const NAME[KNOB_N] = {"mode", "bright", "gain"};
-      Wire1.begin(KNOB_SDA, KNOB_SCL);
-      Wire1.setClock(100000);
-      uint8_t found = 0;
       for (uint8_t i = 0; i < KNOB_N; i++) {
-        Adafruit_seesaw *s = new Adafruit_seesaw(&Wire1);
-        if (s && s->begin(ADDR[i])) {
-          s->pinMode(KNOB_SW, INPUT_PULLUP);
-          knob[i]        = s;
-          knobPos[i]     = s->getEncoderPosition();
-          knobPressed[i] = false;
-          found++;
-          USER_PRINTF("[knob] seesaw 0x%02X (%s) ready\n", ADDR[i], NAME[i]);
-        } else {
-          delete s;
-          knob[i] = nullptr;
-          USER_PRINTF("[knob] seesaw 0x%02X (%s) NOT found\n", ADDR[i], NAME[i]);
-        }
+        NpEncoder &e = npEnc[i];
+        if (e.pinA < 0 || e.pinB < 0) continue;   // -1 = encoder not wired (same convention as SW)
+        pinMode(e.pinA, INPUT_PULLUP);   // EC11s carry no pull-ups; internal is fine over short
+        pinMode(e.pinB, INPUT_PULLUP);   // wires. Enclosure-length runs want the carrier's 10k+100nF.
+        e.prev = (uint8_t)((digitalRead(e.pinA) << 1) | digitalRead(e.pinB));
+        e.pos  = 0;
+        e.sub  = 0;
+        // Pass the GPIO number straight in — do NOT wrap in digitalPinToInterrupt(). That macro
+        // bounds on the variant's NUM_DIGITAL_PINS, which the esp32s3 variant sets to 48 even
+        // though the S3 has 49 GPIOs (0..48). So GPIO 48 (mode knob's B) maps to NOT_AN_INTERRUPT
+        // (-1), arrives as uint8_t 255, and indexes off the GPIO register block -> LoadProhibited
+        // boot loop. On ESP32 the pin number IS the interrupt number, and the core's
+        // __pinInterruptHandlers[] is sized SOC_GPIO_PIN_COUNT (49), so 48 is in range.
+        attachInterruptArg(e.pinA, npEncIsr, &e, CHANGE);
+        attachInterruptArg(e.pinB, npEncIsr, &e, CHANGE);
+        if (SW[i] >= 0) pinMode(SW[i], INPUT_PULLUP);
+        knobPos[i]     = 0;
+        knobPressed[i] = false;
+        USER_PRINTF("[knob] %s: EC11 A=IO%d B=IO%d sw=IO%d\n",
+                    NAME[i], (int)e.pinA, (int)e.pinB, (int)SW[i]);
       }
-      USER_PRINTF("[knob] %u/%u encoder(s) ready on Wire1 (SDA%d/SCL%d)\n",
-                  found, (unsigned)KNOB_N, (int)KNOB_SDA, (int)KNOB_SCL);
+      USER_PRINTF("[knob] %u EC11 encoder(s) armed, %d transitions/detent\n",
+                  (unsigned)KNOB_N, (int)NP_ENC_DETENT);
       // Seed retained gain from npVizGain, and modeIdx from whatever preset actually booted
       // (not a hardcoded 0) so the first mode detent steps from the live look. bright reads
       // live `bri` at turn time, so it needs no seed.
@@ -453,12 +493,12 @@ class RoomMicUploader : public Usermod {
     // are marshalled to loop() (core 1) via pendingBri/pendingPreset, gain applies inline.
     void pollKnobs(uint8_t *buf, size_t cap) {
       static const uint8_t      ID[KNOB_N]   = {0, 1, 2};   // KNOB_EVENT knob u8
+      static const int8_t       SW[KNOB_N]   = {2, -1, -1}; // -1 = not wired yet (ladder, below)
       static const char * const NAME[KNOB_N] = {"mode", "bright", "gain"};
       uint8_t presetN; const uint8_t *slots = presetSlots(presetN);
 
       for (uint8_t i = 0; i < KNOB_N; i++) {
-        if (!knob[i]) continue;
-        int32_t pos = knob[i]->getEncoderPosition();
+        int32_t pos = npEnc[i].pos;      // drained from the ISR; one count per detent
         if (pos != knobPos[i]) {
           int32_t delta = pos - knobPos[i];
           knobPos[i] = pos;
@@ -495,7 +535,14 @@ class RoomMicUploader : public Usermod {
           USER_PRINTF("[knob] %s turn level=%d (%+ld) -> apply + KNOB_EVENT\n",
                       NAME[i], (int)level, (long)delta);
         }
-        bool pressed = !knob[i]->digitalRead(KNOB_SW);   // INPUT_PULLUP: pressed == LOW
+        // Only `mode` has a switch line today. All three EC11 switches are meant to share GPIO 2
+        // via the carrier's resistor ladder (0R / 3.3k / 10k) — enabling bright+gain later is
+        // then two threshold comparisons here, no board respin. See carrier-board-flux-prompt.md.
+        // ⚠️ GPIO 2 is WLED's default LED-bus pin (-D LEDPIN=2). The bus must be DELETED in WLED
+        // config or it owns the pin and this read is meaningless. That is FLASH state, not git:
+        // put it in the Board 1 provisioning script or a flash erase silently kills the button.
+        if (SW[i] < 0) continue;
+        bool pressed = !digitalRead(SW[i]);              // INPUT_PULLUP: pressed == LOW
         if (pressed && !knobPressed[i]) {
           int16_t level;
           if (i == 0) {                  // mode press = jump home (Mountain; clock face not ported yet)
@@ -812,6 +859,22 @@ class RoomMicUploader : public Usermod {
     // reorder takes effect immediately with no reboot and survives the next boot. Any other JSON
     // state (a preset load, a color change) has no "npcycle" key and we no-op.
     void readFromJsonState(JsonObject& root) override {
+      // {"nplyrics":bool} — enter/leave lyrics mode without the knob (web UI). Does exactly what
+      // landing on the virtual LYRICS cycle entry does: Mountain runs underneath the words, and
+      // leaving drops back home. modeIdx is set so the next knob detent steps from here, not from
+      // wherever the knob was last left. presetSlots() clamps count>=1, so slots[0] is always valid.
+      JsonVariantConst nl = root["nplyrics"];
+      if (!nl.isNull()) {
+        uint8_t presetN; const uint8_t *slots = presetSlots(presetN);
+        lyricsActive  = nl.as<bool>();
+        modeIdx       = lyricsActive ? presetN : 0;
+        // ...unless the same POST also picks a preset ({"ps":N,"nplyrics":false} = "leave lyrics
+        // and go to THIS look"). deserializeState applies ps after us, so queuing Mountain here
+        // would stomp it a tick later in loop().
+        if (root["ps"].isNull()) pendingPreset = slots[0];
+        USER_PRINTF("[lyrics] web set active=%d\n", (int)lyricsActive);
+      }
+
       JsonObjectConst np = root["npcycle"];
       if (np.isNull()) return;
       if (!applyCycleDoc(np)) { USER_PRINTLN(F("[cycle] rejected bad npcycle update")); return; }
@@ -820,6 +883,11 @@ class RoomMicUploader : public Usermod {
       if (idx >= 0) modeIdx = (uint8_t)idx;
       USER_PRINTF("[cycle] set live: %u slot(s), lyrics=%d\n", (unsigned)cycleCount, (int)cycleLyrics);
     }
+
+    // Publish lyrics mode so the web UI can show the live state (and so the knob and the web
+    // toggle agree). serializeState() only calls addToJsonState when !forPreset, so this can
+    // never get baked into a saved preset and re-toggled on every preset load.
+    void addToJsonState(JsonObject& root) override { root["nplyrics"] = (bool)lyricsActive; }
 
     // P3: lyrics overlay. Called after effects, before show() — when a word is playing we
     // black out the panel and paint the word on top (covering the equalizer); in a gap or a
