@@ -89,6 +89,7 @@ say "restoring presets + palette + GIF assets onto the board filesystem"
 # Override KEYBEAT_DIR / EQ_DIR if your checkout layout differs.
 KEYBEAT_DIR="${KEYBEAT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../nowplaying/firmware/board1/keybeat" 2>/dev/null && pwd || true)}"
 EQ_DIR="${EQ_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../nowplaying/firmware/board1/equalizer" 2>/dev/null && pwd || true)}"
+SHOW_DIR="${SHOW_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../nowplaying/firmware/board1/stageshow" 2>/dev/null && pwd || true)}"
 if [ -n "${KEYBEAT_DIR}" ] && [ -d "${KEYBEAT_DIR}/assets" ]; then
   for f in "${KEYBEAT_DIR}"/assets/*.gif "${KEYBEAT_DIR}"/assets/*.kb; do
     [ -e "$f" ] || continue
@@ -105,12 +106,22 @@ if [ -n "${KEYBEAT_DIR}" ] && [ -d "${KEYBEAT_DIR}/assets" ]; then
     echo "  WARN: equalizer dir/palette not found (EQ_DIR='${EQ_DIR:-<unset>}') — boot look will be wrong."
   fi
 
-  # Merge mountain slot 3 + keybeat slots 10-15 into one /presets.json
+  # Merge mountain slot 3 + keybeat slots 10-15 + stage-show slots 40-45 into one
+  # /presets.json. The show slots MUST be in this merge: the board loads exactly this
+  # file, so a provision run that omitted them would silently delete every show look
+  # and leave the cue engine applying presets that no longer exist.
+  #
+  # !! DESTRUCTIVE ON A LIVED-IN BOARD !! This REPLACES /presets.json with only what the
+  # repo knows about. The bench board carried 34 presets (hand-added GIF looks in slots
+  # 1-34) that exist nowhere in git — this script would delete all of them. That is fine
+  # for its stated job (rebuild a freshly-erased board) but NOT for topping up a working
+  # one. Pull /presets.json off the board and merge into it instead; a snapshot lives at
+  # nowplaying/firmware/board1/stageshow/presets-board-backup-*.json.
   MERGED="$(mktemp)"
   if [ -n "${EQ_DIR}" ] && [ -f "${EQ_DIR}/preset-mountain.json" ] && \
-     python3 -c "import json,sys; kb=json.load(open('${KEYBEAT_DIR}/presets-keybeat.json')); mt=json.load(open('${EQ_DIR}/preset-mountain.json')); d={}; d.update(mt); d.update(kb); json.dump(d,open('${MERGED}','w'),separators=(',',':'))" 2>/dev/null; then
+     python3 -c "import json,sys,os; kb=json.load(open('${KEYBEAT_DIR}/presets-keybeat.json')); mt=json.load(open('${EQ_DIR}/preset-mountain.json')); d={}; d.update(mt); d.update(kb); p='${SHOW_DIR}/presets-stageshow.json'; d.update(json.load(open(p))) if os.path.isfile(p) else None; json.dump(d,open('${MERGED}','w'),separators=(',',':'))" 2>/dev/null; then
     curl -s -m 15 -F "data=@${MERGED};filename=/presets.json" "${BASE}/edit" >/dev/null \
-      && echo "  uploaded /presets.json (Mountain slot 3 + Keybeat slots 10-15)" || echo "  FAILED /presets.json"
+      && echo "  uploaded /presets.json (Mountain 3 + Keybeat 10-15 + stage show 40-45)" || echo "  FAILED /presets.json"
   else
     # fall back to keybeat-only so the panel at least has the keybeat looks
     curl -s -m 15 -F "data=@${KEYBEAT_DIR}/presets-keybeat.json;filename=/presets.json" "${BASE}/edit" >/dev/null \
@@ -121,6 +132,21 @@ else
   echo "  SKIP: keybeat dir not found (looked in '${KEYBEAT_DIR:-<unset>}')."
   echo "        Set KEYBEAT_DIR=/path/to/nowplaying/firmware/board1/keybeat and re-run,"
   echo "        else the panel boots blank (no preset 3 to load)."
+fi
+
+# Per-song stage shows -> /show_<apple_id>.json at the FS ROOT. NOT a /shows/ subdirectory:
+# WLED's /edit upload handler cannot create directories and answers 500, which this script
+# used to swallow because it only checked curl's exit code and not the HTTP status. The
+# board then logged "no show for track ..." forever. Keep the status check.
+if [ -n "${SHOW_DIR}" ] && [ -d "${SHOW_DIR}/shows" ]; then
+  n=0; bad=0
+  for f in "${SHOW_DIR}"/shows/*.json; do
+    [ -e "$f" ] || continue
+    code=$(curl -s -m 15 -o /dev/null -w '%{http_code}' \
+      -F "data=@${f};filename=/show_$(basename "$f")" "${BASE}/edit")
+    if [ "$code" = "200" ]; then n=$((n+1)); else bad=$((bad+1)); echo "  FAILED $(basename "$f") -> HTTP $code"; fi
+  done
+  echo "  uploaded ${n} stage show(s) as /show_<apple_id>.json${bad:+ (${bad} FAILED)}"
 fi
 
 # Seed the mode-knob cycle order. The firmware falls back to a compiled default if this file

@@ -63,7 +63,8 @@ static int   kbFrameC = 0;
 static float kbPhase = 0.0f;            // 0..1 progress through the current beat
 static unsigned long kbPeriod = 500;    // ms per beat (the locked tempo)
 static unsigned long kbLastBeatT = 0;   // time of last phase-locked correction
-static unsigned long kbLastPeakT = 0;   // time of last raw peak (activity + interval)
+static unsigned long kbLastPeakT = 0;   // time of last beat-plausible peak (interval reference)
+static unsigned long kbLastActiveT = 0; // time of last raw peak of any kind (silence check)
 static unsigned long kbLastT = 0;       // time of last render (for dt)
 static uint8_t kbLastPeak = 0;
 #define KB_MIN_BEAT 200UL               // ignore peaks < 200ms apart (>300bpm)
@@ -286,28 +287,37 @@ byte renderKeybeatToSegment(Segment &seg, uint8_t samplePeak, float volumeSmth) 
 
   // ----- phase-lock to incoming peaks (tempo + phase correction only) -----
   if (rising) {
-    unsigned long iv = now - kbLastPeakT;
-    kbLastPeakT = now;
-    if (iv >= KB_MIN_BEAT && iv <= KB_MAX_BEAT) {
-      // phase error: distance from the nearest predicted beat boundary (-0.5..0.5, 0 = on beat)
-      float err = (kbPhase < 0.5f) ? kbPhase : (kbPhase - 1.0f);
-      if (fabsf(err) < 0.30f) {                 // peak lands near a predicted beat -> tighten lock
-        kbPhase -= err * 0.5f;                  // nudge phase toward the beat
-        if (kbPhase < 0.0f) kbPhase += 1.0f;
-        kbPeriod = (kbPeriod * 4 + iv) / 5;     // gentle tempo adapt
-        kbLastBeatT = now;
-      } else if (now - kbLastBeatT > 2 * kbPeriod) {
-        // lost lock for a while -> (re)acquire tempo from this interval
-        kbPeriod = iv; kbPhase = 0.0f; kbLastBeatT = now;
+    kbLastActiveT = now;                        // any onset means music is playing
+    unsigned long ivRaw = now - kbLastPeakT;
+    if (ivRaw >= KB_MIN_BEAT) {                 // sub-200ms onsets (hats) must not move the
+      kbLastPeakT = now;                        // beat reference, or every iv reads too short
+      if (ivRaw <= KB_MAX_BEAT) {
+        // fold subdivisions/multiples into the tracked octave: without this, onsets on
+        // eighths pull the period toward half a beat and nothing ever pulls it back up
+        unsigned long iv = ivRaw;
+        while (iv < (kbPeriod * 3) / 4) iv *= 2;
+        while (iv > (kbPeriod * 3) / 2) iv /= 2;
+        // phase error: distance from the nearest predicted beat boundary (-0.5..0.5, 0 = on beat)
+        float err = (kbPhase < 0.5f) ? kbPhase : (kbPhase - 1.0f);
+        if (fabsf(err) < 0.30f) {                 // peak lands near a predicted beat -> tighten lock
+          kbPhase -= err * 0.5f;                  // nudge phase toward the beat
+          if (kbPhase < 0.0f) kbPhase += 1.0f;
+          kbPeriod = (kbPeriod * 4 + iv) / 5;     // gentle tempo adapt, within the locked octave
+          kbLastBeatT = now;
+        } else if (now - kbLastBeatT > 2 * kbPeriod) {
+          // lost lock for a while -> (re)acquire tempo from the raw interval, so a genuinely
+          // different tempo can still be picked up (folding would pin us to the old one)
+          kbPeriod = ivRaw; kbPhase = 0.0f; kbLastBeatT = now;
+        }
+        // otherwise: off-beat onset -> ignored for stepping
       }
-      // otherwise: off-beat onset -> ignored for stepping
     }
   }
   if (kbPeriod < KB_MIN_BEAT) kbPeriod = KB_MIN_BEAT;
   if (kbPeriod > KB_MAX_BEAT) kbPeriod = KB_MAX_BEAT;
 
   // ----- free-run the oscillator; step a key frame on each PREDICTED beat (wrap) -----
-  bool active = seg.check1 || (kbLastPeakT != 0 && (now - kbLastPeakT) < KB_ACTIVE_MS);
+  bool active = seg.check1 || (kbLastActiveT != 0 && (now - kbLastActiveT) < KB_ACTIVE_MS);
   if (active) {
     kbPhase += (float)dt * speedF / (float)kbPeriod;
     while (kbPhase >= 1.0f) {

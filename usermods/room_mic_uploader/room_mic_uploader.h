@@ -7,6 +7,7 @@
 #include "uart_link.h"                    // b2-13 inter-board UART1 frame codec (shared with Board 2)
 #include "np_lyrics.h"                    // P1: pure timing model + word font/color (host-tested)
 #include "np_encoder.h"                   // b2-13 knobs: pure quadrature decode (host-tested)
+#include "np_show.h"                      // stage shows: pure cue timeline (host-tested)
 
 // --- b2-13 knobs: 3 bare EC11 quadrature encoders (Seesaw #5880 dropped 2026-07-19) ---
 // Bare EC11s replace the I2C Seesaws: production-bom.md cost lever #1 (~$15/unit), and
@@ -26,10 +27,13 @@ struct NpEncoder {
   volatile uint8_t prev;  // last (A<<1|B) state
 };
 // Index order matches the protocol knob id: 0=mode, 1=bright, 2=gain.
+// pinA/pinB are listed B-first: on the knob PCB (nowplaying/hardware/knob-board) the EC11's
+// A/B land on the carrier's *_A/*_B nets such that clockwise decoded as negative. Swapping
+// the pair here (not the cable, not the board) makes clockwise = up on all three knobs.
 static NpEncoder npEnc[3] = {
-  { 47, 48, 0, 0, 0 },   // mode   — the pair freed by dropping the Seesaws
-  {  1, 12, 0, 0, 0 },   // bright
-  { 41, 42, 0, 0, 0 },   // gain
+  { 48, 47, 0, 0, 0 },   // mode   — GPIO 47/48, the pair freed by dropping the Seesaws
+  { 12,  1, 0, 0, 0 },   // bright — GPIO 1/12
+  { 42, 41, 0, 0, 0 },   // gain   — GPIO 41/42
 };
 
 // CALIBRATION KNOB. Quadrature transitions per physical detent. EC11 batches vary (1, 2 or 4,
@@ -169,6 +173,7 @@ class RoomMicUploader : public Usermod {
     uint8_t          cycleSlots[CYCLE_MAX] = {3, 10, 11, 12, 13, 14, 15};
     volatile uint8_t cycleCount            = 7;      // WRITE LAST
     bool             cycleLyrics           = true;   // append the virtual Lyrics entry?
+    bool             cycleShow             = true;   // append the virtual Stage Show entry?
 
     static int16_t clampU8(int32_t v) { return v < 0 ? 0 : (v > 255 ? 255 : (int16_t)v); }
 
@@ -205,6 +210,7 @@ class RoomMicUploader : public Usermod {
       if (n < 1) return false;                     // empty cycle → reject
       memcpy(cycleSlots, tmp, n);
       cycleLyrics = o["lyrics"] | true;
+      cycleShow   = o["show"] | true;
       cycleCount  = n;                             // publish LAST
       return true;
     }
@@ -217,6 +223,7 @@ class RoomMicUploader : public Usermod {
       JsonArray arr = doc.createNestedArray("cycle");
       for (uint8_t i = 0; i < cycleCount; i++) arr.add(cycleSlots[i]);
       doc["lyrics"] = cycleLyrics;
+      doc["show"]   = cycleShow;
       serializeJson(doc, f);
       f.close();
     }
@@ -504,19 +511,27 @@ class RoomMicUploader : public Usermod {
           knobPos[i] = pos;
           int16_t level;
           if (i == 0) {                  // mode: step one look per detent, wrapping
-            // The cycle is the presetN looks PLUS a trailing virtual LYRICS entry (index
-            // presetN). Re-sync to the live state first so an external change / press-home
-            // can't desync us: lyrics mode pins to its own index (currentPreset is the
-            // underlay = home), otherwise track the live preset.
-            uint8_t modeN = presetN + (cycleLyrics ? 1 : 0);
-            if (lyricsActive && cycleLyrics) modeIdx = presetN;
+            // The cycle is the presetN looks PLUS trailing virtual entries: LYRICS (index
+            // presetN) then STAGE SHOW. Re-sync to the live state first so an external
+            // change / press-home can't desync us: the virtual modes pin to their own index
+            // (currentPreset is the underlay/current cue), otherwise track the live preset.
+            uint8_t lyricsIdx = presetN;
+            uint8_t showIdx   = presetN + (cycleLyrics ? 1 : 0);
+            uint8_t modeN     = presetN + (cycleLyrics ? 1 : 0) + (cycleShow ? 1 : 0);
+            if (lyricsActive && cycleLyrics)   modeIdx = lyricsIdx;
+            else if (showActive && cycleShow)  modeIdx = showIdx;
             else { int cur = presetIndexOf(currentPreset); if (cur >= 0) modeIdx = (uint8_t)cur; }
             modeIdx = (uint8_t)((modeIdx + modeN + (delta > 0 ? 1 : -1)) % modeN);
-            if (modeIdx == presetN) {                     // landed on LYRICS
-              lyricsActive = true;
+            if (cycleLyrics && modeIdx == lyricsIdx) {    // landed on LYRICS
+              lyricsActive = true; showActive = false;
               pendingPreset = slots[0];                   // run Mountain underneath the words
+            } else if (cycleShow && modeIdx == showIdx) { // landed on STAGE SHOW
+              lyricsActive = false; showActive = true;
+              albumLoaded = false;                        // re-read /album.json on entry
+              showTrack.clear();                          // force a load for the playing song
+              pendingPreset = slots[0];                   // home look until the first cue lands
             } else {
-              lyricsActive = false;
+              lyricsActive = false; showActive = false;
               pendingPreset = slots[modeIdx];             // applyPreset() runs in loop()
             }
             level = modeIdx;                              // toast: 0-based mode number (not the raw slot id)
@@ -548,6 +563,7 @@ class RoomMicUploader : public Usermod {
           if (i == 0) {                  // mode press = jump home (Mountain; clock face not ported yet)
             modeIdx = 0;
             lyricsActive = false;        // leave lyrics mode on press-home
+            showActive   = false;        // ...and stage show mode
             pendingPreset = slots[0];
             level = modeIdx;
           } else {                       // bright/gain press = no local action, just the toast cue
@@ -632,6 +648,7 @@ class RoomMicUploader : public Usermod {
     volatile double   anchorPos = 0.0;
     volatile uint32_t anchorAt  = 0;
     volatile bool     haveAnchor = false;
+    int               anchorRejects = 0;   // consecutive rejected re-anchors (see accept_anchor)
 
     std::string curTrack;                 // track_id the timeline was built for ("" = none)
     double      curDur     = -1.0;
@@ -640,6 +657,118 @@ class RoomMicUploader : public Usermod {
     nplyrics::Timeline   slot[2];
     std::vector<double>  slotStarts[2];
     volatile int         liveSlot = -1;   // -1 = no timeline; else index into slot[]
+
+    // ======================== Stage show mode ========================
+    // Reads /show_<track_id>.json off LittleFS (same runtime-config pattern as
+    // /npcycle.json) and applies its preset cues against the re-anchored play clock
+    // that the lyrics path already maintains. Generated offline by songid/showgen.py.
+    static constexpr uint32_t SHOW_STALE_MS = 30000;   // no re-anchor this long => clock is fiction
+    static constexpr size_t   SHOW_MAXCUES  = 64;      // ponytail: ceiling on a hand-authored file
+
+    // Album mode: when a show runs past its track's duration, roll straight into the next
+    // track's show instead of waiting for the room mic to recognize it. Recognition takes
+    // ~10-20 s (capture + songrec), so without this every track change spends its opening
+    // on the previous song's last cue. With it, recognition only *corrects* the clock.
+    static constexpr uint32_t ALBUM_LAG_MS = 45000;   // ignore reports of the track we just left
+
+    std::vector<std::string> albumTracks;   // ordered track_ids from /album.json
+    bool          albumLoaded = false;      // tried to read /album.json for this show session
+    std::string   albumPrevTrack;           // the track an album advance just left
+    uint32_t      albumAdvancedAt = 0;
+
+    volatile bool showActive = false;   // set by the mode knob (uartTask); read by the show tick
+    npshow::Show  showCues;             // cues for showTrack; empty = no show for this song
+    std::string   showTrack;            // track_id showCues was loaded for ("" = nothing loaded)
+    double        showDuration = -1.0;  // track length from the show file; <0 = don't album-advance
+    npshow::Player showPlayer;          // cue cursor + fallback state (host-tested logic)
+
+    // Load /shows/<trackId>.json. Missing file is the normal case (most songs have no
+    // show) — the caller then falls back to the home look, which is what makes the mode
+    // safe to leave selected on the knob.
+    void loadShow(const std::string &trackId) {
+      showCues.clear();
+      showTrack = trackId;
+      showPlayer = npshow::Player();
+      // Root, not /shows/: WLED's /edit upload handler cannot create subdirectories
+      // (it 500s), and the Keybeat loader already resolves its assets at the FS root.
+      std::string path = "/show_" + trackId + ".json";
+      File f = WLED_FS.open(path.c_str(), "r");
+      if (!f) { USER_PRINTF("[show] no show for track %s\n", trackId.c_str()); return; }
+      StaticJsonDocument<2048> doc;
+      DeserializationError err = deserializeJson(doc, f);
+      f.close();
+      if (err) { USER_PRINTF("[show] %s: bad JSON (%s)\n", path.c_str(), err.c_str()); return; }
+      for (JsonObjectConst c : doc["cues"].as<JsonArrayConst>()) {
+        if (showCues.size() >= SHOW_MAXCUES) break;
+        double t = c["t"] | -1.0;
+        int    p = c["preset"] | -1;
+        if (t < 0 || p < 1 || p > 250) continue;        // skip junk, keep the rest
+        showCues.push_back(npshow::Cue{t, (uint8_t)p});
+      }
+      showDuration = doc["duration_s"] | -1.0;
+      USER_PRINTF("[show] loaded %u cues for %s (%s, %.0fs)\n", (unsigned)showCues.size(),
+                  trackId.c_str(), (const char*)(doc["title"] | "?"), showDuration);
+    }
+
+    // Ordered track_ids for the album being played, so show mode can anticipate the next
+    // track instead of waiting on recognition. Missing file = album mode simply off.
+    void loadAlbum() {
+      albumTracks.clear();
+      albumLoaded = true;                   // set even on failure: don't re-read every poll
+      File f = WLED_FS.open("/album.json", "r");
+      if (!f) return;
+      StaticJsonDocument<1024> doc;
+      DeserializationError err = deserializeJson(doc, f);
+      f.close();
+      if (err) { USER_PRINTLN(F("[show] /album.json: bad JSON")); return; }
+      for (JsonVariantConst v : doc["tracks"].as<JsonArrayConst>()) {
+        const char *id = v | "";
+        if (id && *id) albumTracks.push_back(id);
+      }
+      USER_PRINTF("[show] album '%s': %u tracks\n",
+                  (const char*)(doc["name"] | "?"), (unsigned)albumTracks.size());
+    }
+
+    // The show has run past the end of its track. If the album says what comes next, load
+    // it and carry the overflow across as the new track's position, so the next song's
+    // opening is already lit correctly before the mic has recognized a single bar of it.
+    // Returns true if it advanced.
+    bool advanceAlbum(double pos) {
+      if (albumTracks.empty() || showDuration <= 0 || pos < showDuration) return false;
+      size_t i = 0;
+      while (i < albumTracks.size() && albumTracks[i] != showTrack) i++;
+      if (i + 1 >= albumTracks.size()) return false;      // unknown track, or album finished
+
+      double overflow = pos - showDuration;               // keeps the clock continuous
+      albumPrevTrack  = showTrack;
+      albumAdvancedAt = millis();
+      USER_PRINTF("[show] album advance: %s done (%.0fs) -> %s at %.1fs\n",
+                  showTrack.c_str(), showDuration, albumTracks[i + 1].c_str(), overflow);
+      loadShow(albumTracks[i + 1]);
+      anchorPos  = overflow;
+      anchorAt   = millis();
+      haveAnchor = true;
+      return true;
+    }
+
+    // One tick of show playback. Called from the same inner loop that drives the lyrics
+    // overlay, so it inherits the ~60 ms cadence and the anchored clock. The decisions
+    // live in np_show.h so they can be host-tested; this is just the adapter.
+    void tickShow() {
+      if (!showActive) return;
+      uint8_t n; const uint8_t *slots = presetSlots(n);
+      bool st  = npshow::stale(millis(), anchorAt, haveAnchor, SHOW_STALE_MS);
+      double pos = anchorPos + (double)(millis() - anchorAt) / 1000.0;
+      // Only roll into the next track on a clock we still trust — advancing on a stale
+      // one would march through the whole album on nothing but extrapolation.
+      if (!st && advanceAlbum(pos)) pos = anchorPos;
+      int slot = npshow::tick(showPlayer, showCues, pos, st, slots[0]);
+      if (slot < 0) return;
+      pendingPreset = (int16_t)slot;          // applyPreset() runs in loop() on core 1
+      if (st) USER_PRINTF("[show] anchor stale >%us -> fallback to slot %d\n",
+                          (unsigned)(SHOW_STALE_MS / 1000), slot);
+      else    USER_PRINTF("[show] %.1fs cue %d -> preset %d\n", pos, showPlayer.lastCue, slot);
+    }
 
     static std::string urlencode(const std::string &s) {
       static const char *hex = "0123456789ABCDEF";
@@ -710,6 +839,18 @@ class RoomMicUploader : public Usermod {
     void resetLyrics() {
       curTrack.clear(); curDur = -1.0; lyricsFetched = false;
       haveAnchor = false; liveSlot = -1;
+      // A show can end on a deliberately dark cue (blackout). Tearing the cue list down
+      // while STILL in show mode — i.e. the song stopped, rather than the knob leaving —
+      // would strand the panel on that dark look forever, so go home explicitly. When the
+      // knob leaves show mode instead, showActive is already false and it has queued its
+      // own preset, which this must not stomp.
+      bool hadShow = !showCues.empty();
+      showCues.clear(); showTrack.clear(); showPlayer = npshow::Player();
+      showDuration = -1.0; albumPrevTrack.clear();
+      if (showActive && hadShow) {
+        uint8_t n; const uint8_t *slots = presetSlots(n);
+        pendingPreset = slots[0];
+      }
     }
 
     void fetchLyrics(const std::string &trackId, double dur) {
@@ -754,16 +895,50 @@ class RoomMicUploader : public Usermod {
 
       // re-anchor each poll, compensating GET latency: position_s was computed ~mid-round-trip,
       // so the true position at receipt is posS + rtt/2 (+ the bench LEAD for residual offset).
+      //
+      // ...but not blindly. The cloud's position_s carries a fixed recognition-latency fudge
+      // (recognition_lag_s), so consecutive anchors can disagree by tens of seconds and jump
+      // BACKWARDS — measured 17-25 s on the bench. Swallowing those rewinds a stage show by
+      // whole sections and drags lyrics backwards mid-line, so mid-band backwards moves are
+      // dropped and the local extrapolation carries on. See np_show.h.
+      // After an album advance the cloud keeps naming the track we just LEFT for another
+      // recognition cycle (~10-20 s). Anchoring to that would yank the new song's clock
+      // back to the end of the previous one and reload its show, undoing the advance. So
+      // ignore reports of exactly that track, briefly. Any OTHER track is followed at
+      // once — that is a real skip, and the album guess was simply wrong.
+      bool lagging = showActive && !albumPrevTrack.empty() && trackId == albumPrevTrack
+                     && (millis() - albumAdvancedAt) < ALBUM_LAG_MS;
+      if (lagging) {
+        USER_PRINTF("[show] ignoring lagging recognition of %s (already advanced)\n",
+                    trackId.c_str());
+        return;
+      }
+      albumPrevTrack.clear();                               // caught up: resume normal handling
+
       if (posS >= 0) {
-        anchorPos  = posS + (rtt / 2.0 + LYRICS_LEAD_MS) / 1000.0;
-        anchorAt   = millis();
-        haveAnchor = true;
+        double cand = posS + (rtt / 2.0 + LYRICS_LEAD_MS) / 1000.0;
+        double cur  = anchorPos + (double)(millis() - anchorAt) / 1000.0;
+        bool   fresh = !npshow::stale(millis(), anchorAt, haveAnchor, SHOW_STALE_MS);
+        // A track change is not jitter: the new song's position bears no relation to the
+        // old one's, so the jitter guard must not veto it.
+        bool sameTrack = (trackId == curTrack);
+        if (!sameTrack || npshow::accept_anchor(cand, cur, haveAnchor && fresh, anchorRejects)) {
+          anchorPos  = cand;
+          anchorAt   = millis();
+          haveAnchor = true;
+        } else {
+          USER_PRINTF("[np] ignored backwards re-anchor %.1fs -> %.1fs (jitter)\n", cur, cand);
+        }
       }
 
       if (trackId != curTrack) {                            // new song: drop old words, refetch
         curTrack = trackId; curDur = durS; lyricsFetched = false;
         publishTimeline(nplyrics::Timeline());
       }
+      // Keyed off showTrack, not curTrack: selecting show mode mid-song must load the
+      // show for the song already playing, not wait for the next track change.
+      if (showActive && !albumLoaded) loadAlbum();   // FS read stays on this task
+      if (showActive && trackId != showTrack) loadShow(trackId);
       if (lyrAvail && !lyricsFetched) fetchLyrics(trackId, durS);
     }
 
@@ -781,12 +956,15 @@ class RoomMicUploader : public Usermod {
       const std::string *lastLogged = nullptr;
       bool wasActive = false;
       for (;;) {
-        if (lyricsActive && (WLED_CONNECTED)) {
+        // Lyrics and stage show share this task: both need the same /nowplaying poll and
+        // the same re-anchored clock, and only one of them can be the selected look.
+        if ((lyricsActive || showActive) && (WLED_CONNECTED)) {
           pollNowPlaying();
           // P2 verification hook: log word changes over serial (P3 replaces this with the
           // panel draw). Cheap and only while lyrics mode is the active look.
           uint32_t t0 = millis();
-          while (lyricsActive && millis() - t0 < LYRICS_POLL_MS) {
+          while ((lyricsActive || showActive) && millis() - t0 < LYRICS_POLL_MS) {
+            tickShow();
             const std::string *w = currentWord();
             if (w != lastLogged && !(w && lastLogged && *w == *lastLogged)) {
               double pos = haveAnchor ? anchorPos + (double)(millis() - anchorAt) / 1000.0 : -1.0;
@@ -811,6 +989,7 @@ class RoomMicUploader : public Usermod {
       // cycleSlots/cycleCount). Missing/invalid => the compiled default stands. FS is mounted
       // by now (usermod setup() runs late in WLED boot).
       loadCycle();
+      loadAlbum();
 
       // The inter-board UART link comes up first and independently of the (large) multipart
       // body: the heartbeat + RE-CHECK path must work even if the ingest buffer fails to alloc.
@@ -836,6 +1015,17 @@ class RoomMicUploader : public Usermod {
     // applyPreset() expect the WLED main-loop context (core 1) — running them here avoids
     // stateUpdated() reentrancy against the render loop. Ingest/heartbeat stay on their tasks.
     void loop() override {
+      // [DEBUG-kb01] bright-channel raw levels: distinguishes wiring (levels never change while
+      // turning) from firmware (levels change but no detent events). Remove after bring-up.
+      static unsigned long kb01Last = 0;
+      if (millis() - kb01Last > 1000) {
+        kb01Last = millis();
+        // Mapping probe: all free (non-HUB75/mic/PSRAM/USB) GPIOs, to find which pin a shorted
+        // shield terminal actually lands on.
+        USER_PRINTF("[DEBUG-kb01] IO0=%d IO1=%d IO3=%d IO12=%d IO17=%d IO18=%d IO41=%d IO42=%d\n",
+                    digitalRead(0), digitalRead(1), digitalRead(3), digitalRead(12),
+                    digitalRead(17), digitalRead(18), digitalRead(41), digitalRead(42));
+      }
       // Preset FIRST, then brightness: applyPreset() restores the preset's own stored bri, so a
       // bright nudge that landed in the same poll must be applied AFTER it to win (otherwise the
       // user's brightness change silently vanishes under the preset's value).
@@ -872,7 +1062,22 @@ class RoomMicUploader : public Usermod {
         // and go to THIS look"). deserializeState applies ps after us, so queuing Mountain here
         // would stomp it a tick later in loop().
         if (root["ps"].isNull()) pendingPreset = slots[0];
+        if (lyricsActive) showActive = false;             // the two virtual modes are exclusive
         USER_PRINTF("[lyrics] web set active=%d\n", (int)lyricsActive);
+      }
+
+      // {"npshow":bool} — enter/leave stage show mode without the knob. Same shape as
+      // nplyrics above; this is also how the mode is verified without turning a knob.
+      JsonVariantConst ns = root["npshow"];
+      if (!ns.isNull()) {
+        uint8_t presetN; const uint8_t *slots = presetSlots(presetN);
+        showActive = ns.as<bool>();
+        albumLoaded = false;                              // re-read /album.json on entry
+        modeIdx    = showActive ? (uint8_t)(presetN + (cycleLyrics ? 1 : 0)) : 0;
+        if (showActive) lyricsActive = false;
+        showTrack.clear();                                // force a load for the playing song
+        if (root["ps"].isNull()) pendingPreset = slots[0];
+        USER_PRINTF("[show] web set active=%d\n", (int)showActive);
       }
 
       JsonObjectConst np = root["npcycle"];
@@ -887,7 +1092,10 @@ class RoomMicUploader : public Usermod {
     // Publish lyrics mode so the web UI can show the live state (and so the knob and the web
     // toggle agree). serializeState() only calls addToJsonState when !forPreset, so this can
     // never get baked into a saved preset and re-toggled on every preset load.
-    void addToJsonState(JsonObject& root) override { root["nplyrics"] = (bool)lyricsActive; }
+    void addToJsonState(JsonObject& root) override {
+      root["nplyrics"] = (bool)lyricsActive;
+      root["npshow"]   = (bool)showActive;
+    }
 
     // P3: lyrics overlay. Called after effects, before show() — when a word is playing we
     // black out the panel and paint the word on top (covering the equalizer); in a gap or a
