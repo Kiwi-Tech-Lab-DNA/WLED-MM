@@ -53,10 +53,17 @@ say "applying HUB75 64x32 matrix + local-I2S-mic config"
 # def.ps=3: boot straight into the "Mountain" Equalizer look (fx 230 + custom palette) so the
 #   panel is never blank on boot. (Was 10/Blade; mountain is the hero look.)
 # Autosave OFF: it rewrites presets.json from live state every 15s and corrupts the slot table.
+# Glow strip (2026-09-25): WS281x (type 22) on GPIO 2 = the old SW_LADDER knob-push line,
+#   starting right after the matrix at LED 2048. STRIP_LEN = pixels actually on the strip.
+#   maxpwr is the auto-brightness limiter; HUB75 is EXCLUDED from it (const.h
+#   EXCLUDE_FROM_ABL), so 1100 mA = ~1 A for the strip + WLED's fixed 100 mA ESP allowance.
+STRIP_LEN="${STRIP_LEN:-158}"
 curl -s -m 8 -X POST "${BASE}/json/cfg" -H 'Content-Type: application/json' -d '{
   "hw":{"led":{
-    "total":2048,
-    "ins":[{"type":102,"start":0,"len":2048,"order":1,"rev":false,"skip":0,"pin":[1]}],
+    "total":'"$((2048 + STRIP_LEN))"',
+    "maxpwr":1100,"ledma":55,
+    "ins":[{"type":102,"start":0,"len":2048,"order":1,"rev":false,"skip":0,"pin":[1]},
+           {"type":22,"start":2048,"len":'"$STRIP_LEN"',"order":0,"rev":false,"skip":0,"pin":[2]}],
     "matrix":{"mpc":1,"panels":[{"b":false,"r":false,"v":false,"s":false,"x":0,"y":0,"h":32,"w":64}]}
   }},
   "def":{"ps":3,"on":true,"bri":160},
@@ -171,15 +178,15 @@ for i in $(seq 1 30); do
   out=$(curl -s -m 3 "${BASE}/json/info" 2>/dev/null) || { sleep 2; continue; }
   count=$(printf '%s' "$out" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("leds",{}).get("count",""))' 2>/dev/null || true)
   src=$(printf '%s'  "$out" | python3 -c 'import sys,json;print((json.load(sys.stdin).get("u",{}).get("Audio Source",["?"])[0]))' 2>/dev/null || true)
-  if [ "$count" = "2048" ]; then ok=1; break; fi
+  if [ "$count" = "$((2048 + STRIP_LEN))" ]; then ok=1; break; fi
   sleep 2
 done
 
 if [ "$ok" = 1 ]; then
-  echo "PASS: leds.count=2048 (64x32 matrix active) | Audio Source: ${src}"
+  echo "PASS: leds.count=$((2048 + STRIP_LEN)) (64x32 matrix + ${STRIP_LEN}-px strip) | Audio Source: ${src}"
   echo "If 'Audio Source' is not 'I2S digital', the room_mic_uploader build patch is missing."
 else
-  echo "FAIL: matrix not active after reboot (leds.count != 2048). Check the HUB75 build (WLED_ENABLE_HUB75MATRIX) and bus type."
+  echo "FAIL: matrix not active after reboot (leds.count != $((2048 + STRIP_LEN))). Check the HUB75 build (WLED_ENABLE_HUB75MATRIX) and bus type."
   exit 1
 fi
 

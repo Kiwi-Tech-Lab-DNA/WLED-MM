@@ -460,7 +460,7 @@ class RoomMicUploader : public Usermod {
     // is nothing to probe for — a disconnected encoder simply never emits. Called once from the
     // UART task, which is also the only place the counters are drained.
     void knobsBegin() {
-      static const int8_t       SW[KNOB_N]   = {2, -1, -1};   // see the GPIO 2 note below
+      static const int8_t       SW[KNOB_N]   = {-1, -1, -1};  // GPIO 2 is the LED strip now (see pollKnobs)
       static const char * const NAME[KNOB_N] = {"mode", "bright", "gain"};
       for (uint8_t i = 0; i < KNOB_N; i++) {
         NpEncoder &e = npEnc[i];
@@ -500,7 +500,7 @@ class RoomMicUploader : public Usermod {
     // are marshalled to loop() (core 1) via pendingBri/pendingPreset, gain applies inline.
     void pollKnobs(uint8_t *buf, size_t cap) {
       static const uint8_t      ID[KNOB_N]   = {0, 1, 2};   // KNOB_EVENT knob u8
-      static const int8_t       SW[KNOB_N]   = {2, -1, -1}; // -1 = not wired yet (ladder, below)
+      static const int8_t       SW[KNOB_N]   = {-1, -1, -1}; // no pushes: GPIO 2 drives the glow strip
       static const char * const NAME[KNOB_N] = {"mode", "bright", "gain"};
       uint8_t presetN; const uint8_t *slots = presetSlots(presetN);
 
@@ -553,9 +553,10 @@ class RoomMicUploader : public Usermod {
         // Only `mode` has a switch line today. All three EC11 switches are meant to share GPIO 2
         // via the carrier's resistor ladder (0R / 3.3k / 10k) — enabling bright+gain later is
         // then two threshold comparisons here, no board respin. See carrier-board-flux-prompt.md.
-        // ⚠️ GPIO 2 is WLED's default LED-bus pin (-D LEDPIN=2). The bus must be DELETED in WLED
-        // config or it owns the pin and this read is meaningless. That is FLASH state, not git:
-        // put it in the Board 1 provisioning script or a flash erase silently kills the button.
+        // 2026-09-25: the pushes are given up. GPIO 2 (SW_LADDER) now drives a WS281x glow strip
+        // as a second WLED bus (provision-board1.sh); the knob-board end of the brown wire is
+        // pulled and carrier C7 removed. Keep SW all -1: knobsBegin runs after WLED's bus init,
+        // so a pinMode() here would take the strip's data pin back as an input.
         if (SW[i] < 0) continue;
         bool pressed = !digitalRead(SW[i]);              // INPUT_PULLUP: pressed == LOW
         if (pressed && !knobPressed[i]) {
@@ -984,12 +985,66 @@ class RoomMicUploader : public Usermod {
     static void lyricsTrampoline(void *arg) { static_cast<RoomMicUploader *>(arg)->runLyrics(); }
 
   public:
+    // Glow strip (GPIO 2, the LEDs after the 64x32 matrix). Presets saved from the web UI carry
+    // {"stop":0} for every unused segment slot, so a look change deletes the strip's segment.
+    // While it exists we snapshot its look (fx, palette, colours, sliders); when it's gone we put
+    // it back through WLED's normal JSON path. Set the strip's look in the web UI (segment after
+    // the matrix) and it sticks; the snapshot lives in /strip.json so it survives power cuts.
+    // ponytail: polled every 250ms, so a look change can blank the strip for up to ~250ms.
+    String        stripSeg = F("{\"on\":true,\"fx\":156,\"pal\":74,\"sx\":128,\"ix\":160}"); // Gravcenter
+    unsigned long stripChangedAt = 0;   // 0 = /strip.json up to date
+
+    void keepStripSegment() {
+      const uint16_t first = Segment::maxWidth * Segment::maxHeight;  // matrix pixels come first
+      const uint16_t total = strip.getLengthTotal();
+      if (!strip.isMatrix || total <= first) return;                   // no strip configured
+      static StaticJsonDocument<1536> d;                                // static: off the loop stack
+      for (uint8_t i = 0; i < strip.getSegmentsNum(); i++) {
+        Segment &sg = strip.getSegment(i);
+        if (!sg.isActive() || sg.start < first) continue;
+        JsonObject o = d.to<JsonObject>();
+        serializeSegment(o, sg, i, true, false);                        // look only, no bounds/id
+        o.remove("id");
+        o.remove("frz");                                                // never persist a freeze: it'd come back dark every boot
+        String now; serializeJson(o, now);
+        if (now != stripSeg) { stripSeg = now; stripChangedAt = millis() | 1; }
+        return;
+      }
+      if (deserializeJson(d, stripSeg)) return;                         // corrupt snapshot: leave dark
+      JsonObject seg = d.as<JsonObject>();
+      uint8_t id = 1;                                                   // reuse a freed slot, else append
+      while (id < strip.getSegmentsNum() && strip.getSegment(id).isActive()) id++;
+      seg["id"] = id;
+      seg["start"] = first; seg["stop"] = total; seg["startY"] = 0; seg["stopY"] = 1;
+      static StaticJsonDocument<2048> st; st.clear();
+      st["seg"].to<JsonArray>().add(seg);
+      auto keep = currentPreset;                                        // a seg edit marks the look "modified" (ps -1);
+      deserializeState(st.as<JsonObject>(), CALL_MODE_NO_NOTIFY);       // the knob's modeIdx sync needs the real one
+      currentPreset = keep;
+      USER_PRINTF("[strip] segment restored: %s\n", stripSeg.c_str());
+    }
+
+    void saveStripSeg() {               // debounced: slider drags don't hammer flash
+      if (!stripChangedAt || millis() - stripChangedAt < 5000) return;
+      stripChangedAt = 0;
+      File f = WLED_FS.open("/strip.json", "w");
+      if (f) { f.print(stripSeg); f.close(); }
+    }
+
+    void loadStripSeg() {
+      File f = WLED_FS.open("/strip.json", "r");
+      if (!f) return;                   // first boot: the Gravcenter default stands
+      String v = f.readString(); f.close();
+      if (v.length()) stripSeg = v;
+    }
+
     void setup() override {
       // Load the knob cycle order from /npcycle.json BEFORE the knob task starts (it reads
       // cycleSlots/cycleCount). Missing/invalid => the compiled default stands. FS is mounted
       // by now (usermod setup() runs late in WLED boot).
       loadCycle();
       loadAlbum();
+      loadStripSeg();
 
       // The inter-board UART link comes up first and independently of the (large) multipart
       // body: the heartbeat + RE-CHECK path must work even if the ingest buffer fails to alloc.
@@ -1041,6 +1096,8 @@ class RoomMicUploader : public Usermod {
         if (bri) briLast = bri;
         stateUpdated(CALL_MODE_DIRECT_CHANGE);
       }
+      static unsigned long stripLast = 0;
+      if (millis() - stripLast > 250) { stripLast = millis(); keepStripSegment(); saveStripSeg(); }
     }
 
     // The web preset-manager POSTs {"npcycle":{"cycle":[...],"lyrics":bool}} to /json/state to
