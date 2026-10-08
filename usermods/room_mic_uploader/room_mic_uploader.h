@@ -27,13 +27,13 @@ struct NpEncoder {
   volatile uint8_t prev;  // last (A<<1|B) state
 };
 // Index order matches the protocol knob id: 0=mode, 1=bright, 2=gain.
-// pinA/pinB are listed B-first: on the knob PCB (nowplaying/hardware/knob-board) the EC11's
-// A/B land on the carrier's *_A/*_B nets such that clockwise decoded as negative. Swapping
-// the pair here (not the cable, not the board) makes clockwise = up on all three knobs.
+// Direction is set by the pin ORDER here: swap a pair to reverse that knob. History: the
+// knob PCB (nowplaying/hardware/knob-board) needed B-first (2026-09-26); the knobs as wired
+// in the guitar decode clockwise=down with that, so they're A-first again (2026-10-07).
 static NpEncoder npEnc[3] = {
-  { 48, 47, 0, 0, 0 },   // mode   — GPIO 47/48, the pair freed by dropping the Seesaws
-  { 12,  1, 0, 0, 0 },   // bright — GPIO 1/12
-  { 42, 41, 0, 0, 0 },   // gain   — GPIO 41/42
+  { 47, 48, 0, 0, 0 },   // mode   — GPIO 47/48, the pair freed by dropping the Seesaws
+  {  1, 12, 0, 0, 0 },   // bright — GPIO 1/12
+  { 41, 42, 0, 0, 0 },   // gain   — GPIO 41/42
 };
 
 // CALIBRATION KNOB. Quadrature transitions per physical detent. EC11 batches vary (1, 2 or 4,
