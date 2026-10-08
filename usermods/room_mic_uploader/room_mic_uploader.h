@@ -183,7 +183,6 @@ class RoomMicUploader : public Usermod {
     struct BuilderCmd { uint8_t type, slot, panel, strip, n; char name[33]; uint8_t slots[CYCLE_MAX]; };
     BuilderCmd       cmd;                     // written by uartTask before cmdPending, read by loop()
     volatile bool    cmdPending = false;      // uartTask -> loop()
-    uint8_t          cmdStep    = 0;          // loop()-only: PRESET_SAVE step sequencing
     volatile bool    ackPending = false;      // loop() -> uartTask (published LAST)
     uint8_t          ackType = 0, ackArg = 0, ackStatus = 0;
     uint32_t         lastPiHeartbeat = 0;     // uartTask-only: KNOB_GRAB auto-release timer
@@ -583,10 +582,17 @@ class RoomMicUploader : public Usermod {
     }
 
     // KNOB_GRAB (uartTask-only). While grabbed, pollKnobs streams the mode knob instead of applying
-    // it. Release — explicit, or GRAB_TIMEOUT_MS without a Pi heartbeat — re-applies the current
-    // cycle preset so a PREVIEW leaves no trace.
+    // it. Grab emits the current detent count once so Board 2 has a baseline and diffs the very
+    // first detent. Release — explicit, or GRAB_TIMEOUT_MS without a Pi heartbeat — re-applies the
+    // current cycle preset so a PREVIEW leaves no trace.
     void setGrab(bool on) {
-      if (on) { knobGrabbed = true; lastPiHeartbeat = millis(); USER_PRINTLN(F("[builder] knob grabbed")); return; }
+      if (on) {
+        knobGrabbed = true; lastPiHeartbeat = millis();
+        uint8_t b[UART_MAX_FRAME];                   // knobPos, not npEnc.pos: an unpolled detent stays a delta
+        Serial1.write(b, uart_make_knob(0, (int16_t)knobPos[0], 0x00, b, sizeof b));
+        USER_PRINTLN(F("[builder] knob grabbed"));
+        return;
+      }
       if (!knobGrabbed) return;
       knobGrabbed = false;
       uint8_t n; const uint8_t *slots = presetSlots(n);
@@ -621,25 +627,40 @@ class RoomMicUploader : public Usermod {
         USER_PRINTF("[builder] rejected frame 0x%02X (len %u)\n", d.type, (unsigned)d.len);
         return;
       }
-      cmdStep = 0;
       cmdPending = true;                               // publish LAST
     }
 
-    // Run the queued builder command on the WLED main loop (core 1). PRESET_SAVE is a 3-step
-    // sequence because applyPreset()/savePreset() are asynchronous — handlePresets() consumes one
-    // request per loop iteration — so: apply panel -> wait -> apply strip -> wait -> savePreset ->
-    // wait for the flash write -> ACK. A missing library slot (ERR_FS_PLOAD) rejects the save
-    // rather than baking whatever was live into the preset.
+    // PRESET_SAVE without applying anything: built preset = {"n", "seg": [panel's seg, strip's seg]}
+    // written straight to presets.json, so a boot re-push is invisible and costs one flash write
+    // per preset. Library presets are look-only, one segment each (board1-config sanitizes them),
+    // so this joins two arrays — no surgery on live state. The built preset carries no bri/on, so
+    // the bright knob survives mode changes. False = a library slot is missing (or the file is busy).
+    bool composePreset() {
+      DynamicJsonDocument out(4096), sd(2048);       // library entries are <= ~450 B serialized
+      if (esp32SemTake(presetFileMux, 2500) != pdTRUE) return false;
+      bool ok = readObjectFromFileUsingId("/presets.json", cmd.panel, &out)
+             && readObjectFromFileUsingId("/presets.json", cmd.strip, &sd)
+             && out["seg"][0].is<JsonObject>() && sd["seg"][0].is<JsonObject>()
+             && out["seg"].add(sd["seg"][0]);
+      if (ok) {
+        out["n"] = cmd.name;
+        unsigned t0 = millis();
+        while (strip.isUpdating() && millis() - t0 < 40) delay(1);   // FS during sendout glitches LEDs
+        ok = writeObjectToFileUsingId("/presets.json", cmd.slot, &out);
+        if (ok) presetsModifiedTime = toki.second();
+      }
+      esp32SemGive(presetFileMux);
+      if (ok) updateFSInfo();
+      return ok;
+    }
+
+    // Run the queued builder command on the WLED main loop (core 1), then ACK.
     void runBuilderCmd() {
       if (!cmdPending || ackPending || presetsActionPending()) return;
       uint8_t status = UART_ACK_OK;
       if (cmd.type == UART_PRESET_SAVE) {
-        bool loadFailed = (errorFlag == ERR_FS_PLOAD);
-        if (cmdStep == 0) { if (loadFailed) errorFlag = ERR_NONE; applyPreset(cmd.panel, CALL_MODE_DIRECT_CHANGE); cmdStep = 1; return; }
-        if (cmdStep == 1 && !loadFailed) { applyPreset(cmd.strip, CALL_MODE_DIRECT_CHANGE); cmdStep = 2; return; }
-        if (cmdStep == 2 && !loadFailed) { savePreset(cmd.slot, cmd.name); cmdStep = 3; return; }
-        if (loadFailed) status = UART_ACK_REJECTED;
-        else currentPreset = cmd.slot;                 // the live look IS this preset now (knob re-sync)
+        if (!composePreset()) status = UART_ACK_REJECTED;
+        else currentPreset = cmd.slot;   // the Builder previewed exactly this, so the knob re-syncs to it
         USER_PRINTF("[builder] save %u = panel %u + strip %u \"%s\" -> %s\n",
                     cmd.slot, cmd.panel, cmd.strip, cmd.name, status ? "REJECTED (slot missing)" : "ok");
       } else if (cmd.type == UART_PRESET_DELETE) {
