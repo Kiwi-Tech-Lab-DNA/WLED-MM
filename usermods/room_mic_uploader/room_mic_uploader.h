@@ -187,6 +187,9 @@ class RoomMicUploader : public Usermod {
     volatile bool    ackPending = false;      // loop() -> uartTask (published LAST)
     uint8_t          ackType = 0, ackArg = 0, ackStatus = 0;
     uint32_t         lastPiHeartbeat = 0;     // uartTask-only: KNOB_GRAB auto-release timer
+    // Link diagnostics, published in /json/state as "npuart": the only way to see the B2->B1
+    // direction from the desk (Board 1's console is not on USB; the Pi's TX was never proven).
+    volatile uint32_t uartRxBytes = 0, uartRxFrames = 0;
     static constexpr uint32_t GRAB_TIMEOUT_MS = 10000;   // a Pi crash can't leave the mode knob dead
 
     static int16_t clampU8(int32_t v) { return v < 0 ? 0 : (v > 255 ? 255 : (int16_t)v); }
@@ -669,7 +672,9 @@ class RoomMicUploader : public Usermod {
       uint32_t last_hb = 0, last_knob = 0;
       for (;;) {
         while (Serial1.available()) {
+          uartRxBytes++;
           if (dec.feed((uint8_t)Serial1.read())) {
+            uartRxFrames++;
             if (dec.type == UART_RECHECK) {
               recheckRequest = true;
               USER_PRINTLN(F("[uart] RECHECK in <- Board 2 (forcing ingest)"));
@@ -1072,6 +1077,8 @@ class RoomMicUploader : public Usermod {
     // never get baked into a saved preset and re-toggled on every preset load.
     void addToJsonState(JsonObject& root) override {
       root["nplyrics"] = (bool)lyricsActive;
+      JsonObject u = root.createNestedObject("npuart");
+      u["rx"] = (uint32_t)uartRxBytes; u["frames"] = (uint32_t)uartRxFrames; u["grab"] = knobGrabbed;
     }
 
     // P3: lyrics overlay. Called after effects, before show() — when a word is playing we
