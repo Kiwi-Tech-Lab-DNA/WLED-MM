@@ -20,8 +20,9 @@ single command.
 | Audioreactive **local mic** (vs UDP-receive) | build patch keeps `SR_DMTYPE=1` (`pio-scripts/patch_audioreactive.py`) + runtime `sync.mode` | ⚠️ binary is correct; runtime `sync.mode` can be stale |
 | **HUB75 64×32 matrix** (LED bus + 2D layout) | WLED runtime `cfg.json` only | ❌ wiped by erase → panel dark |
 | **Color order** (RGB, not the GRB default) | WLED runtime `cfg.json` (`hw.led.ins[0].order=1`) | ❌ wiped by erase → R/G swapped (red shows green) |
-| **Boot preset** (`def.ps=3` → Mountain spectrum on boot) | WLED runtime `cfg.json` | ❌ wiped by erase → panel blank on boot |
-| **Keybeat presets + GIF assets** | LittleFS (`presets.json` + 29 GIFs/`.kb`), sourced from the sibling `nowplaying` repo | ❌ wiped by erase → no looks to load |
+| **Boot preset** (`def.ps=170` → the first built preset, Mountain / Gravcenter) | WLED runtime `cfg.json` | ❌ wiped by erase → panel blank on boot |
+| **Library presets + GIF assets + palette** | LittleFS (`presets.json` = `presets-library.json` here, GIF/`.kb` pairs from the sibling `nowplaying` repo, `palette0.json`) | ❌ wiped by erase → no looks to load |
+| **Built presets 170–209 + `/npcycle.json`** | LittleFS, but **user data owned by the Pi** (`/etc/nowplaying/presets.json`), re-pushed over UART on every board boot | ✅ rebuilt by the Pi after any erase |
 
 So after a from-scratch flash, WiFi comes up by itself (that's how the script can reach
 the board), but the **matrix** must be restored and the **mic mode** asserted. That's
@@ -48,13 +49,14 @@ pio run -e board1 -t upload --upload-port /dev/ttyACM0
 ```
 
 `provision-board1.sh` POSTs the HUB75 bus + 2D matrix, the **RGB color order**, the
-local-I2S-mic config (incl. `I2S_FastPath=0` — the silent-mic fix), and the **`def.ps=3`
-boot preset**; uploads the **Mountain palette + preset and the Keybeat presets.json + GIF
-assets** from the sibling `nowplaying` repo; reboots; and verifies `leds.count == 2048`,
-the audio source is `I2S digital`, and the boot preset applied (`ps == 3`, `fx == 230`,
-`pal == 255` → the Mountain spectrum on the panel). After it prints `PASS`, the panel
-renders the Mountain look in correct colors and the mic ingests — and that config persists
-across normal reboots and OTA updates (only a *flash erase* wipes it again).
+local-I2S-mic config (incl. `I2S_FastPath=0` — the silent-mic fix), and the **`def.ps=170`
+boot preset**; uploads the **library** (`presets-library.json` verbatim as `/presets.json`,
+`/palette0.json`, and the GIF + `.kb` pairs from the sibling `nowplaying` repo); reboots; and
+verifies `hw.led.total == 2254` and the boot preset (`ps == 170`, Mountain `fx == 230`,
+`pal == 74`, two segments). Slot 170 is pushed by the Pi, so on a fresh board that last check
+is a WARN until `np-bridge` has run. The config persists across normal reboots and OTA
+updates (only a *flash erase* wipes it again). The script never GETs `/json/info` — that
+stalls the panel.
 
 The Keybeat assets live in the **sibling** `nowplaying` repo
 (`../../nowplaying/firmware/board1/keybeat/`), not here — the script auto-locates them
@@ -63,10 +65,15 @@ relative to its own path and falls back to `$KEYBEAT_DIR` if your checkout diffe
 ## Files
 
 - `provision-board1.sh` — one-shot post-flash provisioning (idempotent; safe to re-run).
-- `npcycle-default.json` — the mode-knob cycle order (`{"cycle":[slot ids],"lyrics":bool}`),
-  seeded to `/npcycle.json` on LittleFS. The `room_mic_uploader` firmware reads it at boot and
-  the web preset-manager rewrites it live (`POST /json/state {"npcycle":{…}}`) — reorder looks
-  with no reflash. Missing/invalid → the firmware's compiled default stands (real safety net).
+- `npcycle-default.json` — the mode-knob cycle order (`{"cycle":[slot ids]}`, a plain list of
+  built presets), seeded to `/npcycle.json` on LittleFS. The firmware reads it at boot; the Pi
+  replaces it over UART (`CYCLE_SET`) and the web preset-manager can rewrite it live
+  (`POST /json/state {"npcycle":{…}}`). Missing/invalid → the compiled default `[170]` stands.
+- `library.json` + `presets-library.json` — the look library (panel slots 1–119, strip 120–169),
+  produced by the rescue + curation passes (`curate.py`). `provision-board1.sh` uploads
+  `presets-library.json` as the board's `/presets.json` unchanged. Run `check-library.py` after
+  any edit. Slot 3 Mountain is `pal 74` (what the board has always run); the provisioning check
+  agrees with the library.
 - `rescue-board1.py` — **read-only** pull of the live board's library into the repo (Builder
   step 1, 2026-10-07): byte-exact `board-snapshot-<date>/` (+ `MANIFEST.txt` with sha256;
   never edit it), `presets-library.json` (panel slots 1–34, each sanitized to seg 0 only,
@@ -75,11 +82,9 @@ relative to its own path and falls back to `$KEYBEAT_DIR` if your checkout diffe
   `../../nowplaying/firmware/board1/keybeat/assets/` — the **one** home for GIF looks, because
   `provision-board1.sh` already reads them from there. `/cfg.json` is deliberately not
   snapshotted (WiFi PSK); `board1-cfg-reference.json` is the redacted equivalent.
-  Known discrepancy: slot 3 (Mountain) carries `pal 74` on the board, while the design docs
-  and the provisioning check say `pal 255` (custom `/palette0.json`) — recorded as-is, not fixed.
   Five GIFs on the board (moonman, nowplay, nprain, snoopy, zilla1) are not referenced by any
   panel preset; they are rescued anyway.
-- `check-library.py` — self-check: 34 slots, one `id 0` segment each, every `fx 231` GIF present.
+- `check-library.py` — self-check: every slot is one segment (`id 0` panel / `id 1` strip), names and audio flags agree with `library.json`, every `fx 231` GIF present.
 - `board1-cfg-reference.json` — a full `GET /json/cfg` snapshot of a known-good board, for
   reference / diffing. Safe to commit: WLED redacts passwords from `/json/cfg` (only
   `pskl` *lengths* appear), and the device token is not stored in WLED config.

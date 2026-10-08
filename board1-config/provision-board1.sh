@@ -34,7 +34,8 @@ say() { printf '\n=== %s ===\n' "$1"; }
 
 say "waiting for ${IP} to respond"
 for i in $(seq 1 30); do
-  if curl -s -m 3 "${BASE}/json/info" >/dev/null 2>&1; then break; fi
+  # Never GET /json/info on Board 1 (it stalls the panel); /json/state is the liveness probe.
+  if curl -s -m 3 "${BASE}/json/state" >/dev/null 2>&1; then break; fi
   sleep 2
   [ "$i" = 30 ] && { echo "FAIL: board not reachable at ${IP}"; exit 1; }
 done
@@ -50,8 +51,10 @@ say "applying HUB75 64x32 matrix + local-I2S-mic config"
 #   returns pure silence on this mic — the equalizer freezes AND ingest reads RMS 0, even though
 #   the mic HARDWARE is fine (direct-I2S smoketest shows full signal). Verified 2026-06-26:
 #   flipping it to 0 + reboot restored capture (RMS>gate, /ingest -> matched:true). Do NOT omit.
-# def.ps=3: boot straight into the "Mountain" Equalizer look (fx 230 + custom palette) so the
-#   panel is never blank on boot. (Was 10/Blade; mountain is the hero look.)
+# def.ps=170: boot into the first BUILT preset (factory default Mountain / Gravcenter, both
+#   segments). Slot 170 is user data owned by the Pi (nowplaying-project/docs/builder.md): it
+#   does not exist on a freshly provisioned board until bridge.py pushes it over UART, so the
+#   panel stays dark for the few seconds between boot and that push.
 # Autosave OFF: it rewrites presets.json from live state every 15s and corrupts the slot table.
 # Glow strip (2026-09-25): WS281x (type 22) on GPIO 2 = the old SW_LADDER knob-push line,
 #   starting right after the matrix at LED 2048. STRIP_LEN = pixels actually on the strip.
@@ -66,7 +69,7 @@ curl -s -m 8 -X POST "${BASE}/json/cfg" -H 'Content-Type: application/json' -d '
            {"type":22,"start":2048,"len":'"$STRIP_LEN"',"order":0,"rev":false,"skip":0,"pin":[2]}],
     "matrix":{"mpc":1,"panels":[{"b":false,"r":false,"v":false,"s":false,"x":0,"y":0,"h":32,"w":64}]}
   }},
-  "def":{"ps":3,"on":true,"bri":160},
+  "def":{"ps":170,"on":true,"bri":160},
   "um":{
     "AudioReactive":{
       "enabled":true,
@@ -79,82 +82,52 @@ curl -s -m 8 -X POST "${BASE}/json/cfg" -H 'Content-Type: application/json' -d '
 }'
 echo
 
-say "restoring presets + palette + GIF assets onto the board filesystem"
-# The looks live in the SIBLING nowplaying repo (not WLED-MM). A flash erase wipes LittleFS,
-# so re-upload here:
-#   - Keybeat (firmware/board1/keybeat/): six GIFs + .kb beat sidecars + presets-keybeat.json
-#     (slots 10-15). Each .gif/.kb goes to the FS ROOT ("/x.gif") — the Keybeat loader resolves
-#     seg names against root. The preset table carries 64x32 seg bounds; without them {"ps":N}
-#     loads a 1px seg.
-#   - Mountain (firmware/board1/equalizer/): the boot look = fx 230 Equalizer LF + a CUSTOM
-#     palette. palette-mountain.json -> /palette0.json (this makes it WLED custom palette
-#     **pal 255**: the render path resolves customPalettes[255-pal], so palette0.json == 255,
-#     NOT the palcount+index number /json/info shows — see equalizer/README.md). preset-mountain
-#     .json carries slot 3, which references pal 255. Custom palettes only (re)load on BOOT, so
-#     the reboot below is required for the palette to exist before slot 3 renders.
-# We MERGE the keybeat + mountain preset tables into the single /presets.json the board loads.
-# Override KEYBEAT_DIR / EQ_DIR if your checkout layout differs.
-KEYBEAT_DIR="${KEYBEAT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../nowplaying/firmware/board1/keybeat" 2>/dev/null && pwd || true)}"
-EQ_DIR="${EQ_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../nowplaying/firmware/board1/equalizer" 2>/dev/null && pwd || true)}"
-SHOW_DIR="${SHOW_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../nowplaying/firmware/board1/stageshow" 2>/dev/null && pwd || true)}"
+say "restoring the library presets + palette + GIF assets onto the board filesystem"
+# The LIBRARY (panel looks = slots 1-119, strip looks = 120-169) is source-controlled here:
+#   presets-library.json — the preset bodies, each sanitized to exactly its own segment. It IS
+#                          the board's /presets.json: uploaded verbatim, never merged by hand.
+#   library.json         — slot -> {name, audio} (what the Pi reports to the cloud).
+#   board-snapshot-*/palette0.json — the Mountain custom palette (slot 3 references pal 74).
+# The GIF + .kb pairs the fx 231 (Keybeat) looks reference live in the SIBLING nowplaying repo
+# (firmware/board1/keybeat/assets/) — each goes to the FS ROOT ("/x.gif"): the Keybeat loader
+# resolves seg names against root. Override KEYBEAT_DIR if your checkout layout differs.
+#
+# Built presets (170-209) and /npcycle.json are NOT provisioned: they are user data, rebuilt
+# from the Pi's /etc/nowplaying/presets.json over UART every time the board boots.
+#
+# !! DESTRUCTIVE ON A LIVED-IN BOARD !! This REPLACES /presets.json with the repo library;
+# hand edits made in the WLED UI are lost. That is the point (reproducible appliance).
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+KEYBEAT_DIR="${KEYBEAT_DIR:-$(cd "${HERE}/../../nowplaying/firmware/board1/keybeat" 2>/dev/null && pwd || true)}"
+PALETTE="${PALETTE:-${HERE}/board-snapshot-2026-10-07/palette0.json}"
+python3 "${HERE}/check-library.py" || { echo "FAIL: library self-check failed — not uploading"; exit 1; }
+
 if [ -n "${KEYBEAT_DIR}" ] && [ -d "${KEYBEAT_DIR}/assets" ]; then
+  n=0
   for f in "${KEYBEAT_DIR}"/assets/*.gif "${KEYBEAT_DIR}"/assets/*.kb; do
     [ -e "$f" ] || continue
     base="$(basename "$f")"
     curl -s -m 30 -F "data=@${f};filename=/${base}" "${BASE}/edit" >/dev/null \
-      && printf '  uploaded /%s\n' "$base" || printf '  FAILED /%s\n' "$base"
+      && n=$((n+1)) || printf '  FAILED /%s\n' "$base"
   done
-
-  # Mountain custom palette -> /palette0.json (== pal 255 at render time)
-  if [ -n "${EQ_DIR}" ] && [ -f "${EQ_DIR}/palette-mountain.json" ]; then
-    curl -s -m 15 -F "data=@${EQ_DIR}/palette-mountain.json;filename=/palette0.json" "${BASE}/edit" >/dev/null \
-      && echo "  uploaded /palette0.json (Mountain gradient -> pal 255)" || echo "  FAILED /palette0.json"
-  else
-    echo "  WARN: equalizer dir/palette not found (EQ_DIR='${EQ_DIR:-<unset>}') — boot look will be wrong."
-  fi
-
-  # Merge mountain slot 3 + keybeat slots 10-15 + stage-show slots 40-45 into one
-  # /presets.json. The show slots MUST be in this merge: the board loads exactly this
-  # file, so a provision run that omitted them would silently delete every show look
-  # and leave the cue engine applying presets that no longer exist.
-  #
-  # !! DESTRUCTIVE ON A LIVED-IN BOARD !! This REPLACES /presets.json with only what the
-  # repo knows about. The bench board carried 34 presets (hand-added GIF looks in slots
-  # 1-34) that exist nowhere in git — this script would delete all of them. That is fine
-  # for its stated job (rebuild a freshly-erased board) but NOT for topping up a working
-  # one. Pull /presets.json off the board and merge into it instead; a snapshot lives at
-  # nowplaying/firmware/board1/stageshow/presets-board-backup-*.json.
-  MERGED="$(mktemp)"
-  if [ -n "${EQ_DIR}" ] && [ -f "${EQ_DIR}/preset-mountain.json" ] && \
-     python3 -c "import json,sys,os; kb=json.load(open('${KEYBEAT_DIR}/presets-keybeat.json')); mt=json.load(open('${EQ_DIR}/preset-mountain.json')); d={}; d.update(mt); d.update(kb); p='${SHOW_DIR}/presets-stageshow.json'; d.update(json.load(open(p))) if os.path.isfile(p) else None; json.dump(d,open('${MERGED}','w'),separators=(',',':'))" 2>/dev/null; then
-    curl -s -m 15 -F "data=@${MERGED};filename=/presets.json" "${BASE}/edit" >/dev/null \
-      && echo "  uploaded /presets.json (Mountain 3 + Keybeat 10-15 + stage show 40-45)" || echo "  FAILED /presets.json"
-  else
-    # fall back to keybeat-only so the panel at least has the keybeat looks
-    curl -s -m 15 -F "data=@${KEYBEAT_DIR}/presets-keybeat.json;filename=/presets.json" "${BASE}/edit" >/dev/null \
-      && echo "  uploaded /presets.json (Keybeat slots 10-15 ONLY — mountain merge failed)" || echo "  FAILED /presets.json"
-  fi
-  rm -f "${MERGED}"
+  echo "  uploaded ${n} GIF/.kb file(s)"
 else
-  echo "  SKIP: keybeat dir not found (looked in '${KEYBEAT_DIR:-<unset>}')."
-  echo "        Set KEYBEAT_DIR=/path/to/nowplaying/firmware/board1/keybeat and re-run,"
-  echo "        else the panel boots blank (no preset 3 to load)."
+  echo "  WARN: keybeat assets not found (KEYBEAT_DIR='${KEYBEAT_DIR:-<unset>}') — the fx 231 looks will be blank."
 fi
 
-# Per-song stage shows -> /show_<apple_id>.json at the FS ROOT. NOT a /shows/ subdirectory:
-# WLED's /edit upload handler cannot create directories and answers 500, which this script
-# used to swallow because it only checked curl's exit code and not the HTTP status. The
-# board then logged "no show for track ..." forever. Keep the status check.
-if [ -n "${SHOW_DIR}" ] && [ -d "${SHOW_DIR}/shows" ]; then
-  n=0; bad=0
-  for f in "${SHOW_DIR}"/shows/*.json; do
-    [ -e "$f" ] || continue
-    code=$(curl -s -m 15 -o /dev/null -w '%{http_code}' \
-      -F "data=@${f};filename=/show_$(basename "$f")" "${BASE}/edit")
-    if [ "$code" = "200" ]; then n=$((n+1)); else bad=$((bad+1)); echo "  FAILED $(basename "$f") -> HTTP $code"; fi
-  done
-  echo "  uploaded ${n} stage show(s) as /show_<apple_id>.json${bad:+ (${bad} FAILED)}"
+if [ -f "${PALETTE}" ]; then
+  curl -s -m 15 -F "data=@${PALETTE};filename=/palette0.json" "${BASE}/edit" >/dev/null \
+    && echo "  uploaded /palette0.json (Mountain gradient)" || echo "  FAILED /palette0.json"
+else
+  echo "  WARN: palette not found (PALETTE='${PALETTE}') — Mountain will render with the wrong colors."
 fi
+
+LIB="$(mktemp)"
+python3 -c "import json,sys; json.dump(json.load(open(sys.argv[1])), open(sys.argv[2],'w'), separators=(',',':'))" \
+  "${HERE}/presets-library.json" "${LIB}"
+curl -s -m 30 -F "data=@${LIB};filename=/presets.json" "${BASE}/edit" >/dev/null \
+  && echo "  uploaded /presets.json (library: panel 1-119, strip 120-169)" || echo "  FAILED /presets.json"
+rm -f "${LIB}"
 
 # Seed the mode-knob cycle order. The firmware falls back to a compiled default if this file
 # is missing, so this is a nicety (keeps the web preset-manager's "cycle order" panel populated
@@ -173,35 +146,36 @@ say "reboot to apply the LED bus + mic driver + boot preset"
 curl -s -m 6 -X POST "${BASE}/json/state" -H 'Content-Type: application/json' -d '{"rb":true}' >/dev/null || true
 
 say "verifying after reboot"
+# No /json/info here either: the LED total comes from /json/cfg.
 ok=0
 for i in $(seq 1 30); do
-  out=$(curl -s -m 3 "${BASE}/json/info" 2>/dev/null) || { sleep 2; continue; }
-  count=$(printf '%s' "$out" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("leds",{}).get("count",""))' 2>/dev/null || true)
-  src=$(printf '%s'  "$out" | python3 -c 'import sys,json;print((json.load(sys.stdin).get("u",{}).get("Audio Source",["?"])[0]))' 2>/dev/null || true)
+  out=$(curl -s -m 3 "${BASE}/json/cfg" 2>/dev/null) || { sleep 2; continue; }
+  count=$(printf '%s' "$out" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("hw",{}).get("led",{}).get("total",""))' 2>/dev/null || true)
   if [ "$count" = "$((2048 + STRIP_LEN))" ]; then ok=1; break; fi
   sleep 2
 done
 
 if [ "$ok" = 1 ]; then
-  echo "PASS: leds.count=$((2048 + STRIP_LEN)) (64x32 matrix + ${STRIP_LEN}-px strip) | Audio Source: ${src}"
-  echo "If 'Audio Source' is not 'I2S digital', the room_mic_uploader build patch is missing."
+  echo "PASS: hw.led.total=$((2048 + STRIP_LEN)) (64x32 matrix + ${STRIP_LEN}-px strip)"
 else
-  echo "FAIL: matrix not active after reboot (leds.count != $((2048 + STRIP_LEN))). Check the HUB75 build (WLED_ENABLE_HUB75MATRIX) and bus type."
+  echo "FAIL: matrix not active after reboot (hw.led.total != $((2048 + STRIP_LEN))). Check the HUB75 build (WLED_ENABLE_HUB75MATRIX) and bus type."
   exit 1
 fi
 
-say "verifying boot preset applied (panel should be showing the Mountain spectrum, not blank)"
+say "verifying the boot preset (170 = Mountain / Gravcenter once the Pi has pushed it)"
+# Slot 170 is pushed by the Pi, not by this script. Until that happens the board boots with no
+# preset and the panel is dark — expected on a fresh provision, so that case is a WARN, not FAIL.
+# Mountain is fx 230 pal 74 in the library (pal 74 is what the board has always run; the old
+# "pal 255 = /palette0.json" note in equalizer/README.md is superseded by the rescued library).
 sleep 2
 st=$(curl -s -m 6 "${BASE}/json/state" 2>/dev/null) || true
 ps=$(printf '%s' "$st" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("ps",""))' 2>/dev/null || true)
 seg_fx=$(printf '%s' "$st" | python3 -c 'import sys,json;d=json.load(sys.stdin);print((d.get("seg") or [{}])[0].get("fx",""))' 2>/dev/null || true)
 seg_pal=$(printf '%s' "$st" | python3 -c 'import sys,json;d=json.load(sys.stdin);print((d.get("seg") or [{}])[0].get("pal",""))' 2>/dev/null || true)
-cpal=$(curl -s -m 6 "${BASE}/json/info" 2>/dev/null | python3 -c 'import sys,json;print(json.load(sys.stdin).get("cpalcount",0))' 2>/dev/null || echo 0)
-if [ "$ps" = "3" ] && [ "$seg_fx" = "230" ] && [ "$seg_pal" = "255" ]; then
-  echo "PASS: boot preset 3 'Mountain' applied (fx=${seg_fx}, pal=${seg_pal}, custom palettes loaded=${cpal})."
+segs=$(printf '%s' "$st" | python3 -c 'import sys,json;print(len([s for s in json.load(sys.stdin).get("seg",[]) if s.get("stop",0)]))' 2>/dev/null || true)
+if [ "$ps" = "170" ] && [ "$seg_fx" = "230" ] && [ "$seg_pal" = "74" ] && [ "$segs" = "2" ]; then
+  echo "PASS: boot preset 170 applied (Mountain fx=${seg_fx} pal=${seg_pal}, ${segs} segments = panel + strip)."
 else
-  echo "WARN: mountain boot look not fully applied (ps='${ps}', fx='${seg_fx}', pal='${seg_pal}', cpalcount=${cpal})."
-  echo "      - pal must be 255 (palette0.json) and cpalcount>=1, else /palette0.json didn't load."
-  echo "      - If the board reboot-loops, the seg pal is wrong (NOT 255) — see equalizer/README.md."
-  echo "      Confirm the 'restoring presets + palette' step uploaded all files, then re-run."
+  echo "WARN: boot preset 170 not (yet) applied (ps='${ps}', fx='${seg_fx}', pal='${seg_pal}', segments=${segs})."
+  echo "      Fresh board: wait for the Pi's np-bridge to push its presets.json over UART, then reboot and re-check."
 fi
