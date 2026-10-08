@@ -20,7 +20,7 @@
 #include <stddef.h>
 
 #define UART_SYNC          0x7E
-#define UART_MAX_PAYLOAD   32     // PROVISION TLV (b2-10) is the largest; bump then if needed
+#define UART_MAX_PAYLOAD   64     // PRESET_SAVE (3 + name) / CYCLE_SET (1 + 40) are the largest
 #define UART_MAX_FRAME     (UART_MAX_PAYLOAD + 4)  // SYNC+TYPE+LEN+payload+CRC
 
 enum UartFrameType : uint8_t {
@@ -29,7 +29,19 @@ enum UartFrameType : uint8_t {
   UART_PROVISION  = 0x03,  // B2->B1 : TLV (b2-10, not built here)
   UART_RESET      = 0x04,  // either : empty (b2-10, not built here)
   UART_HEARTBEAT  = 0x05,  // both   : uptime_s u32 LE
+  // Builder (nowplaying-project/docs/builder.md §Wire). All u8, no padding.
+  UART_KNOB_GRAB     = 0x06,  // B2->B1 : flags u8 (bit0: 1=grab, 0=release). No ACK.
+                              //          While grabbed Board 1 stops applying the mode knob; its
+                              //          KNOB_EVENT value becomes the raw detent count (B2 diffs it).
+  UART_PREVIEW       = 0x07,  // B2->B1 : seg u8, slot u8 — applyPreset(slot) (one segment). No ACK.
+  UART_PRESET_SAVE   = 0x08,  // B2->B1 : slot u8, panel u8, strip u8, name[LEN-3] (no NUL; >32 truncated)
+  UART_PRESET_DELETE = 0x09,  // B2->B1 : slot u8
+  UART_CYCLE_SET     = 0x0A,  // B2->B1 : n u8, slots[n] u8 (n 1..40, slots 1..250)
+  UART_ACK           = 0x0B,  // B1->B2 : type u8 (the frame being answered), arg u8 (its slot / n),
+                              //          status u8 (0=ok, 1=rejected: bad slot/count/name)
 };
+#define UART_ACK_OK       0
+#define UART_ACK_REJECTED 1
 
 static inline uint8_t uart_crc8(uint8_t crc, uint8_t b) {
   crc ^= b;
@@ -108,5 +120,58 @@ static inline bool uart_parse_heartbeat(const UartDecoder &d, uint32_t *uptime_s
   if (d.type != UART_HEARTBEAT || d.len != 4) return false;
   *uptime_s = (uint32_t)d.payload[0] | ((uint32_t)d.payload[1] << 8) |
               ((uint32_t)d.payload[2] << 16) | ((uint32_t)d.payload[3] << 24);
+  return true;
+}
+
+// --- builder frames (B2->B1 requests, B1->B2 ACK) ----------------------------
+static inline size_t uart_make_grab(uint8_t flags, uint8_t *out, size_t cap) {
+  return uart_encode(UART_KNOB_GRAB, &flags, 1, out, cap);
+}
+static inline size_t uart_make_preview(uint8_t seg, uint8_t slot, uint8_t *out, size_t cap) {
+  uint8_t p[2] = { seg, slot };
+  return uart_encode(UART_PREVIEW, p, 2, out, cap);
+}
+// name: up to UART_MAX_PAYLOAD-3 bytes, not NUL-terminated on the wire (LEN delimits it).
+static inline size_t uart_make_preset_save(uint8_t slot, uint8_t panel, uint8_t strip,
+                                           const char *name, uint8_t name_len,
+                                           uint8_t *out, size_t cap) {
+  if (name_len > UART_MAX_PAYLOAD - 3) return 0;
+  uint8_t p[UART_MAX_PAYLOAD] = { slot, panel, strip };
+  for (uint8_t i = 0; i < name_len; i++) p[3 + i] = (uint8_t)name[i];
+  return uart_encode(UART_PRESET_SAVE, p, (uint8_t)(3 + name_len), out, cap);
+}
+static inline size_t uart_make_preset_delete(uint8_t slot, uint8_t *out, size_t cap) {
+  return uart_encode(UART_PRESET_DELETE, &slot, 1, out, cap);
+}
+static inline size_t uart_make_cycle_set(const uint8_t *slots, uint8_t n, uint8_t *out, size_t cap) {
+  if (n > UART_MAX_PAYLOAD - 1) return 0;
+  uint8_t p[UART_MAX_PAYLOAD] = { n };
+  for (uint8_t i = 0; i < n; i++) p[1 + i] = slots[i];
+  return uart_encode(UART_CYCLE_SET, p, (uint8_t)(1 + n), out, cap);
+}
+static inline size_t uart_make_ack(uint8_t type, uint8_t arg, uint8_t status, uint8_t *out, size_t cap) {
+  uint8_t p[3] = { type, arg, status };
+  return uart_encode(UART_ACK, p, 3, out, cap);
+}
+// Copies the name out NUL-terminated into name[name_cap] (truncating if needed).
+static inline bool uart_parse_preset_save(const UartDecoder &d, uint8_t *slot, uint8_t *panel,
+                                          uint8_t *strip, char *name, size_t name_cap) {
+  if (d.type != UART_PRESET_SAVE || d.len < 3 || name_cap == 0) return false;
+  *slot = d.payload[0]; *panel = d.payload[1]; *strip = d.payload[2];
+  size_t n = d.len - 3;
+  if (n > name_cap - 1) n = name_cap - 1;
+  for (size_t i = 0; i < n; i++) name[i] = (char)d.payload[3 + i];
+  name[n] = '\0';
+  return true;
+}
+// Returns a pointer into the decoder's payload (valid until the next feed()).
+static inline bool uart_parse_cycle_set(const UartDecoder &d, const uint8_t **slots, uint8_t *n) {
+  if (d.type != UART_CYCLE_SET || d.len < 1 || d.len != 1 + d.payload[0]) return false;
+  *n = d.payload[0]; *slots = d.payload + 1;
+  return true;
+}
+static inline bool uart_parse_ack(const UartDecoder &d, uint8_t *type, uint8_t *arg, uint8_t *status) {
+  if (d.type != UART_ACK || d.len != 3) return false;
+  *type = d.payload[0]; *arg = d.payload[1]; *status = d.payload[2];
   return true;
 }
