@@ -9,7 +9,7 @@ ASSETS = os.path.join(HERE, "../../nowplaying/firmware/board1/keybeat/assets")
 lib = json.load(open(os.path.join(HERE, "presets-library.json")))
 names = json.load(open(os.path.join(HERE, "library.json")))
 panel, strip = names["panel"], names.get("strip", {})
-assert set(range(1, 35)) <= set(map(int, panel)) and all(1 <= int(s) < 120 for s in panel), sorted(map(int, panel))
+assert all(1 <= int(s) < 120 for s in panel), sorted(map(int, panel))
 assert all(120 <= int(s) < 170 for s in strip), strip
 assert set(lib) == set(panel) | set(strip), set(lib) ^ (set(panel) | set(strip))
 for kind, want_id in ((panel, 0), (strip, 1)):

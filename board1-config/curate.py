@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Builder step 2: curate the mode library, one WLED effect at a time, on the live board.
 
-Walks EVERY effect the board offers (RSVD excluded; 2D-only effects excluded for the
-strip), applies each to the chosen segment and asks keep / skip. The bucket — audio-
+First walks the library presets already in this segment's bucket (keep = unchanged,
+skip = deleted from the library), then EVERY effect the board offers (RSVD excluded;
+panel = 2D-capable only, strip = not 2D-only), applies each and asks keep / skip. The bucket — audio-
 reactive or not — comes from WLED's fxdata flags (v/f), with Keybeat (231) forced to
 audio. A keep snapshots the live segment as a one-segment library preset in
 presets-library.json and names it in library.json[seg] = {slot: {"n", "audio"}}.
-Skips are remembered in curation-skipped.json so the pass is resumable. The segment's
+Decisions are remembered in curation-state.json so the pass is resumable. The segment's
 original look is restored on exit. Never touches the other segment.
 
     python3 curate.py panel|strip [--audio | --ambient] [--list] [--host 192.168.1.121]
@@ -16,7 +17,7 @@ import argparse, json, re, urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).parent
-LIB, PRESETS, SKIPPED = HERE / "library.json", HERE / "presets-library.json", HERE / "curation-skipped.json"
+LIB, PRESETS, STATE = HERE / "library.json", HERE / "presets-library.json", HERE / "curation-state.json"
 SEG = {"panel": 0, "strip": 1}
 SLOTS = {"panel": range(1, 120), "strip": range(120, 170)}   # built presets take 170..209
 SEG_NAME = {"panel": "Front Panel", "strip": "Back Strip"}
@@ -67,24 +68,52 @@ def main():
 
     lib = json.loads(LIB.read_text()); lib.setdefault(a.seg, {})
     presets = json.loads(PRESETS.read_text())
-    skipped = json.loads(SKIPPED.read_text()) if SKIPPED.exists() else {}
-    skipped.setdefault(a.seg, [])
-    done_fx = {presets[s]["seg"][0]["fx"] for s in lib[a.seg]} | set(skipped[a.seg])
+    state = json.loads(STATE.read_text()) if STATE.exists() else {}
+    st = state.setdefault(a.seg, {"reviewed_slots": [], "kept_fx": [], "skipped_fx": []})
     free = [s for s in SLOTS[a.seg] if str(s) not in presets]
-
     names, fxdata = get(a.host, "/json/eff"), get(a.host, "/json/fxdata")
-    todo = [c for c in candidates(names, fxdata, a.seg)
-            if c[0] not in done_fx and (not a.audio or c[2]) and (not a.ambient or not c[2])]
-    print(f"{a.seg}: {len(todo)} effects to review, {len(free)} slots free, "
-          f"{len(lib[a.seg])} kept, {len(skipped[a.seg])} skipped so far")
+    want = lambda audio: (not a.audio or audio) and (not a.ambient or not audio)
+
+    # phase 1: the library presets already in this bucket; phase 2: every raw effect
+    slots = [s for s, e in sorted(lib[a.seg].items(), key=lambda kv: int(kv[0]))
+             if int(s) not in st["reviewed_slots"] and want(e["audio"])]
+    done_fx = set(st["kept_fx"]) | set(st["skipped_fx"])
+    todo = [c for c in candidates(names, fxdata, a.seg) if c[0] not in done_fx and want(c[2])]
+    print(f"{a.seg}: {len(slots)} library presets + {len(todo)} effects to review, {len(free)} slots free, "
+          f"{len(st['reviewed_slots'])} presets reviewed, {len(st['kept_fx'])} effects kept, {len(st['skipped_fx'])} skipped so far")
     if a.list:
+        for s in slots:
+            print(f"  slot {s:>3} {lib[a.seg][s]['n']:<24} {'audio' if lib[a.seg][s]['audio'] else 'ambient'}  (fx {presets[s]['seg'][0]['fx']})")
         for fx, name, audio in todo:
-            print(f"  {fx:3d} {name:<24} {'audio' if audio else 'ambient'}")
+            print(f"  fx {fx:3d} {name:<24} {'audio' if audio else 'ambient'}")
         return
+
+    def save():
+        PRESETS.write_text(json.dumps(presets, separators=(",", ":")) + "\n")
+        LIB.write_text(json.dumps(lib, indent=1) + "\n")
+        STATE.write_text(json.dumps(state) + "\n")
+
+    def ask(label):
+        while True:
+            k = input(f"{label}  [y/n/q] ").strip().lower()
+            if k in ("y", "n", "q"):
+                return k
 
     original = get(a.host, "/json/state")["seg"][seg_id]
     npal = len(get(a.host, "/json/pal"))
     try:
+        for s in slots:
+            e = lib[a.seg][s]
+            post(a.host, {"seg": [presets[s]["seg"][0]]})           # the preset's own look, as stored
+            k = ask(f"{'♪' if e['audio'] else ' '} slot {s:>3} {e['n']:<24}")
+            if k == "q":
+                return
+            if k == "n":
+                del lib[a.seg][s]; del presets[s]; free = sorted(free + [int(s)])
+                print(f"   removed slot {s}")
+            else:
+                st["reviewed_slots"].append(int(s))
+            save()
         for fx, name, audio in todo:
             if not free:
                 print(f"no {a.seg} slots left"); break
@@ -99,10 +128,9 @@ def main():
                 elif k in ("y", "n", "q"):
                     break
             if k == "q":
-                break
+                return
             if k == "n":
-                skipped[a.seg].append(fx)
-                SKIPPED.write_text(json.dumps(skipped) + "\n")
+                st["skipped_fx"].append(fx); save()
                 continue
             live = get(a.host, "/json/state")["seg"][seg_id]
             seg = {"id": seg_id, **{key: live[key] for key in KEEP if key in live}}
@@ -110,8 +138,7 @@ def main():
             slot = free.pop(0)
             presets[str(slot)] = {"n": name, "seg": [seg]}
             lib[a.seg][str(slot)] = {"n": name, "audio": audio}
-            PRESETS.write_text(json.dumps(presets, separators=(",", ":")) + "\n")
-            LIB.write_text(json.dumps(lib, indent=1) + "\n")
+            st["kept_fx"].append(fx); save()
             print(f"   kept as slot {slot} ({'audio' if audio else 'ambient'})")
     finally:
         restore = {"id": seg_id, **{key: original[key] for key in KEEP if key in original}}
