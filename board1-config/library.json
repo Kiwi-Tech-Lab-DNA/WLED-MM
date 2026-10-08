@@ -16,18 +16,6 @@
    "n": "Puddle",
    "audio": true
   },
-  "5": {
-   "n": "Dragon",
-   "audio": true
-  },
-  "6": {
-   "n": "Wave",
-   "audio": true
-  },
-  "7": {
-   "n": "Ruby",
-   "audio": true
-  },
   "8": {
    "n": "Waverly",
    "audio": true
@@ -36,37 +24,13 @@
    "n": "Burn",
    "audio": false
   },
-  "10": {
-   "n": "Blade",
-   "audio": true
-  },
-  "11": {
-   "n": "Bruce",
-   "audio": true
-  },
   "12": {
    "n": "Bumble",
-   "audio": true
-  },
-  "13": {
-   "n": "Cat",
-   "audio": true
-  },
-  "14": {
-   "n": "Tina",
-   "audio": true
-  },
-  "15": {
-   "n": "Gru",
    "audio": true
   },
   "16": {
    "n": "Vortex",
    "audio": false
-  },
-  "17": {
-   "n": "Gru2",
-   "audio": true
   },
   "18": {
    "n": "Waterfall",
@@ -84,58 +48,395 @@
    "n": "Got",
    "audio": true
   },
-  "22": {
-   "n": "Yoda",
-   "audio": true
-  },
-  "23": {
-   "n": "Bluey",
-   "audio": true
-  },
-  "24": {
-   "n": "Ranbowcat",
-   "audio": true
-  },
   "25": {
    "n": "Ranbowcat2",
    "audio": true
   },
-  "26": {
-   "n": "Firedog",
+  "5": {
+   "n": "GEQ",
    "audio": true
+  },
+  "6": {
+   "n": "Swirl",
+   "audio": true
+  },
+  "7": {
+   "n": "Fireworks audio",
+   "audio": true
+  },
+  "10": {
+   "n": "GEQ 3D",
+   "audio": true
+  },
+  "11": {
+   "n": "Paintbrush",
+   "audio": true
+  },
+  "13": {
+   "n": "PS Spray",
+   "audio": true
+  },
+  "14": {
+   "n": "PS GEQ Nova",
+   "audio": true
+  },
+  "15": {
+   "n": "PS Blobs",
+   "audio": true
+  },
+  "17": {
+   "n": "Equalizer LF",
+   "audio": true
+  },
+  "22": {
+   "n": "Rain",
+   "audio": false
+  },
+  "23": {
+   "n": "Ripple",
+   "audio": false
+  },
+  "24": {
+   "n": "Fireworks 1D",
+   "audio": false
+  },
+  "26": {
+   "n": "Spaceships",
+   "audio": false
   },
   "27": {
-   "n": "Sleeptoken",
-   "audio": true
+   "n": "Crazy Bees",
+   "audio": false
   },
   "28": {
-   "n": "Sleeptoken2",
-   "audio": true
+   "n": "Ghost Rider",
+   "audio": false
   },
   "29": {
-   "n": "Rock-A-Gogo",
-   "audio": true
+   "n": "Blobs",
+   "audio": false
   },
   "30": {
-   "n": "Rock-A-Gogo-2",
-   "audio": true
+   "n": "Scrolling Text",
+   "audio": false
   },
   "31": {
-   "n": "Silvion",
-   "audio": true
+   "n": "Drift Rose",
+   "audio": false
   },
   "32": {
-   "n": "Silvion2",
-   "audio": true
+   "n": "Distortion Waves",
+   "audio": false
   },
   "33": {
-   "n": "Blacksabbath",
-   "audio": true
+   "n": "Soap",
+   "audio": false
   },
   "34": {
-   "n": "Paranoid",
-   "audio": true
+   "n": "Octopus",
+   "audio": false
+  },
+  "35": {
+   "n": "Firenoise",
+   "audio": false
+  },
+  "36": {
+   "n": "Squared Swirl",
+   "audio": false
+  },
+  "37": {
+   "n": "DNA",
+   "audio": false
+  },
+  "38": {
+   "n": "Matrix",
+   "audio": false
+  },
+  "39": {
+   "n": "Pulser",
+   "audio": false
+  },
+  "40": {
+   "n": "Drift",
+   "audio": false
+  },
+  "41": {
+   "n": "Sun Radiation",
+   "audio": false
+  },
+  "42": {
+   "n": "Colored Bursts",
+   "audio": false
+  },
+  "43": {
+   "n": "Julia",
+   "audio": false
+  },
+  "44": {
+   "n": "Game Of Life",
+   "audio": false
+  },
+  "45": {
+   "n": "Tartan",
+   "audio": false
+  },
+  "46": {
+   "n": "Polar Lights",
+   "audio": false
+  },
+  "47": {
+   "n": "Frizzles",
+   "audio": false
+  },
+  "48": {
+   "n": "Plasma Ball",
+   "audio": false
+  },
+  "49": {
+   "n": "DNA Spiral",
+   "audio": false
+  },
+  "50": {
+   "n": "Snow Fall",
+   "audio": false
+  },
+  "51": {
+   "n": "PS Volcano",
+   "audio": false
+  },
+  "52": {
+   "n": "PS Vortex",
+   "audio": false
+  },
+  "53": {
+   "n": "PS Fuzzy Noise",
+   "audio": false
+  },
+  "54": {
+   "n": "PS Box",
+   "audio": false
+  },
+  "55": {
+   "n": "PS Attractor",
+   "audio": false
+  },
+  "56": {
+   "n": "PS Impact",
+   "audio": false
+  },
+  "57": {
+   "n": "PS Waterfall",
+   "audio": false
+  },
+  "58": {
+   "n": "PS Ghost Rider",
+   "audio": false
+  },
+  "59": {
+   "n": "PS Galaxy",
+   "audio": false
   }
  },
- "strip": {}
+ "strip": {
+  "120": {
+   "n": "Pixels",
+   "audio": true
+  },
+  "121": {
+   "n": "Pixelwave",
+   "audio": true
+  },
+  "122": {
+   "n": "Juggles",
+   "audio": true
+  },
+  "123": {
+   "n": "Plasmoid",
+   "audio": true
+  },
+  "124": {
+   "n": "Puddles",
+   "audio": true
+  },
+  "125": {
+   "n": "Midnoise",
+   "audio": true
+  },
+  "126": {
+   "n": "Noisemeter",
+   "audio": true
+  },
+  "127": {
+   "n": "Freqwave",
+   "audio": true
+  },
+  "128": {
+   "n": "GEQ",
+   "audio": true
+  },
+  "129": {
+   "n": "Freqpixels",
+   "audio": true
+  },
+  "130": {
+   "n": "Noisefire",
+   "audio": true
+  },
+  "131": {
+   "n": "Puddlepeak",
+   "audio": true
+  },
+  "132": {
+   "n": "Noisemove",
+   "audio": true
+  },
+  "133": {
+   "n": "Gravfreq",
+   "audio": true
+  },
+  "134": {
+   "n": "DJ Light",
+   "audio": true
+  },
+  "135": {
+   "n": "Blurz Plus",
+   "audio": true
+  },
+  "136": {
+   "n": "Rocktaves",
+   "audio": true
+  },
+  "137": {
+   "n": "Party jerk",
+   "audio": true
+  },
+  "138": {
+   "n": "Popcorn audio",
+   "audio": true
+  },
+  "139": {
+   "n": "Multi Comet audio",
+   "audio": true
+  },
+  "140": {
+   "n": "Blink",
+   "audio": false
+  },
+  "141": {
+   "n": "Breathe",
+   "audio": false
+  },
+  "142": {
+   "n": "Wipe",
+   "audio": false
+  },
+  "143": {
+   "n": "Dynamic",
+   "audio": false
+  },
+  "144": {
+   "n": "Colorloop",
+   "audio": false
+  },
+  "145": {
+   "n": "Rainbow",
+   "audio": false
+  },
+  "146": {
+   "n": "Scan",
+   "audio": false
+  },
+  "147": {
+   "n": "Scan Dual",
+   "audio": false
+  },
+  "148": {
+   "n": "Theater",
+   "audio": false
+  },
+  "149": {
+   "n": "Running",
+   "audio": false
+  },
+  "150": {
+   "n": "Saw",
+   "audio": false
+  },
+  "151": {
+   "n": "Dissolve",
+   "audio": false
+  },
+  "152": {
+   "n": "Dissolve Rnd",
+   "audio": false
+  },
+  "153": {
+   "n": "Sparkle",
+   "audio": false
+  },
+  "154": {
+   "n": "Strobe Mega",
+   "audio": false
+  },
+  "155": {
+   "n": "Android",
+   "audio": false
+  },
+  "156": {
+   "n": "Chase",
+   "audio": false
+  },
+  "157": {
+   "n": "Chase Random",
+   "audio": false
+  },
+  "158": {
+   "n": "Chase Rainbow",
+   "audio": false
+  },
+  "159": {
+   "n": "Rainbow Runner",
+   "audio": false
+  },
+  "160": {
+   "n": "Chase 2",
+   "audio": false
+  },
+  "161": {
+   "n": "Aurora",
+   "audio": false
+  },
+  "162": {
+   "n": "Scanner",
+   "audio": false
+  },
+  "163": {
+   "n": "Lighthouse",
+   "audio": false
+  },
+  "164": {
+   "n": "Gradient",
+   "audio": false
+  },
+  "165": {
+   "n": "Loading",
+   "audio": false
+  },
+  "166": {
+   "n": "Two Dots",
+   "audio": false
+  },
+  "167": {
+   "n": "Chase 3",
+   "audio": false
+  },
+  "168": {
+   "n": "Tri Wipe",
+   "audio": false
+  },
+  "169": {
+   "n": "Scanner Dual",
+   "audio": false
+  }
+ }
 }
