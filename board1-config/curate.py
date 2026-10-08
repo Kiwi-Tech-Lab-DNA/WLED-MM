@@ -49,8 +49,8 @@ def candidates(names, fxdata, seg):
     for i, (name, meta) in enumerate(zip(names, fxdata)):
         flags = flags_of(meta)
         two_d_only = "2" in flags and not re.search(r"[01]", flags)
-        if name.startswith("RSVD") or (seg == "strip" and two_d_only):
-            continue
+        if name.startswith("RSVD") or (seg == "strip" and two_d_only) or (seg == "panel" and "2" not in flags):
+            continue  # panel = 2D-capable only (WLED expands 1D effects onto a matrix, but they're strip looks)
         out.append((i, name.replace(" ☾", "").strip(), is_audio(i, meta)))
     return out
 
