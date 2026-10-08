@@ -174,6 +174,21 @@ class RoomMicUploader : public Usermod {
     uint8_t          cycleSlots[CYCLE_MAX] = {170};
     volatile uint8_t cycleCount            = 1;      // WRITE LAST
 
+    // Builder commands (B2->B1 over UART, nowplaying-project/docs/builder.md §Wire). The uartTask
+    // (core 0) parses the frame into `cmd` and raises cmdPending; loop() (core 1) runs it —
+    // applyPreset/savePreset/deletePreset and the FS writes all want the WLED main loop — and
+    // answers through ack*, which the uartTask turns into the ACK frame (Serial1 stays
+    // single-writer). One command in flight: the Pi waits for the ACK before the next mutating
+    // frame, so a second one arriving early is dropped and the Pi's retry picks it up.
+    struct BuilderCmd { uint8_t type, slot, panel, strip, n; char name[33]; uint8_t slots[CYCLE_MAX]; };
+    BuilderCmd       cmd;                     // written by uartTask before cmdPending, read by loop()
+    volatile bool    cmdPending = false;      // uartTask -> loop()
+    uint8_t          cmdStep    = 0;          // loop()-only: PRESET_SAVE step sequencing
+    volatile bool    ackPending = false;      // loop() -> uartTask (published LAST)
+    uint8_t          ackType = 0, ackArg = 0, ackStatus = 0;
+    uint32_t         lastPiHeartbeat = 0;     // uartTask-only: KNOB_GRAB auto-release timer
+    static constexpr uint32_t GRAB_TIMEOUT_MS = 10000;   // a Pi crash can't leave the mode knob dead
+
     static int16_t clampU8(int32_t v) { return v < 0 ? 0 : (v > 255 ? 255 : (int16_t)v); }
 
     // The looks the mode knob cycles: default Mountain (boot/home) + the six Keybeat GIFs, but the
@@ -564,6 +579,82 @@ class RoomMicUploader : public Usermod {
       }
     }
 
+    // KNOB_GRAB (uartTask-only). While grabbed, pollKnobs streams the mode knob instead of applying
+    // it. Release — explicit, or GRAB_TIMEOUT_MS without a Pi heartbeat — re-applies the current
+    // cycle preset so a PREVIEW leaves no trace.
+    void setGrab(bool on) {
+      if (on) { knobGrabbed = true; lastPiHeartbeat = millis(); USER_PRINTLN(F("[builder] knob grabbed")); return; }
+      if (!knobGrabbed) return;
+      knobGrabbed = false;
+      uint8_t n; const uint8_t *slots = presetSlots(n);
+      if (modeIdx >= n) modeIdx = 0;                 // the cycle may have shrunk meanwhile
+      pendingPreset = slots[modeIdx];
+      USER_PRINTLN(F("[builder] knob released -> cycle preset re-applied"));
+    }
+
+    // Parse a mutating builder frame into `cmd` for loop(). Malformed frames (bad length, slot
+    // outside 1..250, count outside 1..CYCLE_MAX) are rejected right here with an ACK — nothing
+    // to sequence. `buf` is the uartTask's frame scratch (we are on that task).
+    void queueBuilderCmd(const UartDecoder &d, uint8_t *buf, size_t cap) {
+      if (cmdPending) { USER_PRINTLN(F("[builder] busy, frame dropped")); return; }
+      auto okSlot = [](uint8_t s) { return s >= 1 && s <= 250; };
+      bool ok = false;
+      cmd.type = d.type;
+      if (d.type == UART_PRESET_SAVE) {
+        ok = uart_parse_preset_save(d, &cmd.slot, &cmd.panel, &cmd.strip, cmd.name, sizeof cmd.name)
+             && okSlot(cmd.slot) && okSlot(cmd.panel) && okSlot(cmd.strip);
+      } else if (d.type == UART_PRESET_DELETE) {
+        cmd.slot = d.payload[0];
+        ok = d.len == 1 && okSlot(cmd.slot);
+      } else if (d.type == UART_CYCLE_SET) {
+        const uint8_t *s;
+        ok = uart_parse_cycle_set(d, &s, &cmd.n) && cmd.n >= 1 && cmd.n <= CYCLE_MAX;
+        if (ok) { memcpy(cmd.slots, s, cmd.n); for (uint8_t i = 0; i < cmd.n; i++) ok = ok && okSlot(s[i]); }
+        cmd.slot = cmd.n;                              // ACK arg = n for CYCLE_SET
+      }
+      if (!ok) {
+        size_t n = uart_make_ack(d.type, cmd.slot, UART_ACK_REJECTED, buf, cap);
+        Serial1.write(buf, n);
+        USER_PRINTF("[builder] rejected frame 0x%02X (len %u)\n", d.type, (unsigned)d.len);
+        return;
+      }
+      cmdStep = 0;
+      cmdPending = true;                               // publish LAST
+    }
+
+    // Run the queued builder command on the WLED main loop (core 1). PRESET_SAVE is a 3-step
+    // sequence because applyPreset()/savePreset() are asynchronous — handlePresets() consumes one
+    // request per loop iteration — so: apply panel -> wait -> apply strip -> wait -> savePreset ->
+    // wait for the flash write -> ACK. A missing library slot (ERR_FS_PLOAD) rejects the save
+    // rather than baking whatever was live into the preset.
+    void runBuilderCmd() {
+      if (!cmdPending || ackPending || presetsActionPending()) return;
+      uint8_t status = UART_ACK_OK;
+      if (cmd.type == UART_PRESET_SAVE) {
+        bool loadFailed = (errorFlag == ERR_FS_PLOAD);
+        if (cmdStep == 0) { if (loadFailed) errorFlag = ERR_NONE; applyPreset(cmd.panel, CALL_MODE_DIRECT_CHANGE); cmdStep = 1; return; }
+        if (cmdStep == 1 && !loadFailed) { applyPreset(cmd.strip, CALL_MODE_DIRECT_CHANGE); cmdStep = 2; return; }
+        if (cmdStep == 2 && !loadFailed) { savePreset(cmd.slot, cmd.name); cmdStep = 3; return; }
+        if (loadFailed) status = UART_ACK_REJECTED;
+        else currentPreset = cmd.slot;                 // the live look IS this preset now (knob re-sync)
+        USER_PRINTF("[builder] save %u = panel %u + strip %u \"%s\" -> %s\n",
+                    cmd.slot, cmd.panel, cmd.strip, cmd.name, status ? "REJECTED (slot missing)" : "ok");
+      } else if (cmd.type == UART_PRESET_DELETE) {
+        deletePreset(cmd.slot);
+        USER_PRINTF("[builder] delete %u\n", cmd.slot);
+      } else if (cmd.type == UART_CYCLE_SET) {
+        if (applyCycle(cmd.slots, cmd.n)) {
+          persistCycle();
+          int idx = presetIndexOf(currentPreset);      // re-anchor the knob index to the live look
+          if (idx >= 0) modeIdx = (uint8_t)idx;
+          USER_PRINTF("[builder] cycle set: %u slot(s)\n", (unsigned)cycleCount);
+        } else status = UART_ACK_REJECTED;
+      }
+      ackType = cmd.type; ackArg = cmd.slot; ackStatus = status;
+      cmdPending = false;
+      ackPending = true;                               // publish LAST
+    }
+
     // b2-13 UART task: owns Serial1, emits the ~1 Hz HEARTBEAT and decodes inbound frames.
     // Lives on its OWN task (not the ingest task) so the heartbeat keeps flowing during the
     // multi-second blocking POST — otherwise Board 2 would see "ear down" on every ingest,
@@ -586,10 +677,27 @@ class RoomMicUploader : public Usermod {
               uint8_t k, fl; int16_t v;
               if (uart_parse_knob(dec, &k, &v, &fl))
                 USER_PRINTF("[uart] knob in: id=%d value=%d flags=0x%02X (forwarded, no-op here)\n", k, v, fl);
+            } else if (dec.type == UART_HEARTBEAT) {
+              lastPiHeartbeat = millis();              // feeds the KNOB_GRAB auto-release
+            } else if (dec.type == UART_KNOB_GRAB && dec.len == 1) {
+              setGrab(dec.payload[0] & 1);
+            } else if (dec.type == UART_PREVIEW && dec.len == 2) {
+              // Library presets are single-segment, so applyPreset() touches only that segment;
+              // the seg byte is informational. No ACK.
+              uint8_t slot = dec.payload[1];
+              if (slot >= 1 && slot <= 250) pendingPreset = slot;
+            } else if (dec.type == UART_PRESET_SAVE || dec.type == UART_PRESET_DELETE || dec.type == UART_CYCLE_SET) {
+              queueBuilderCmd(dec, buf, sizeof buf);
             }
           }
         }
         uint32_t now = millis();
+        if (ackPending) {
+          size_t n = uart_make_ack(ackType, ackArg, ackStatus, buf, sizeof buf);
+          Serial1.write(buf, n);
+          ackPending = false;
+        }
+        if (knobGrabbed && now - lastPiHeartbeat > GRAB_TIMEOUT_MS) setGrab(false);
         if (now - last_knob >= KNOB_POLL_MS) {
           last_knob = now;
           pollKnobs(buf, sizeof buf);   // emits KNOB_EVENT on any turn/press
@@ -926,6 +1034,7 @@ class RoomMicUploader : public Usermod {
         if (bri) briLast = bri;
         stateUpdated(CALL_MODE_DIRECT_CHANGE);
       }
+      runBuilderCmd();                                 // PRESET_SAVE / PRESET_DELETE / CYCLE_SET
       static unsigned long stripLast = 0;
       if (millis() - stripLast > 250) { stripLast = millis(); keepStripSegment(); }
     }
