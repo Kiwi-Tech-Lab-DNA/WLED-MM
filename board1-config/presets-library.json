@@ -1,0 +1,1978 @@
+{
+ "1": {
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "bumble.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      255,
+      255,
+      255
+     ]
+    ],
+    "fx": 210,
+    "sx": 128,
+    "ix": 180,
+    "pal": 13,
+    "c1": 0,
+    "c2": 0,
+    "c3": 8,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": true,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Nova"
+ },
+ "2": {
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "bumble.gif",
+    "col": [
+     [
+      31,
+      103,
+      147
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ],
+    "fx": 186,
+    "sx": 128,
+    "ix": 128,
+    "pal": 0,
+    "c1": 128,
+    "c2": 128,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Akemi"
+ },
+ "3": {
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "Front Panel",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      255,
+      255,
+      255
+     ]
+    ],
+    "fx": 230,
+    "sx": 128,
+    "ix": 16,
+    "pal": 74,
+    "c1": 61,
+    "c2": 48,
+    "c3": 0,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": true,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Mountain"
+ },
+ "4": {
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "bumble.gif",
+    "col": [
+     [
+      162,
+      37,
+      37
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ],
+    "fx": 144,
+    "sx": 128,
+    "ix": 128,
+    "pal": 28,
+    "c1": 8,
+    "c2": 48,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Puddle"
+ },
+ "5": {
+  "on": true,
+  "bri": 200,
+  "transition": 7,
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "dragon.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ],
+    "fx": 231,
+    "sx": 128,
+    "ix": 128,
+    "pal": 0,
+    "c1": 128,
+    "c2": 128,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Dragon"
+ },
+ "6": {
+  "on": true,
+  "bri": 200,
+  "transition": 7,
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "wave.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ],
+    "fx": 231,
+    "sx": 128,
+    "ix": 128,
+    "pal": 0,
+    "c1": 128,
+    "c2": 128,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Wave"
+ },
+ "7": {
+  "on": true,
+  "bri": 200,
+  "transition": 7,
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "ruby.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ],
+    "fx": 231,
+    "sx": 128,
+    "ix": 128,
+    "pal": 0,
+    "c1": 128,
+    "c2": 128,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Ruby"
+ },
+ "8": {
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "bumble.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      255,
+      255,
+      255
+     ]
+    ],
+    "fx": 165,
+    "sx": 26,
+    "ix": 19,
+    "pal": 46,
+    "c1": 128,
+    "c2": 128,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Waverly"
+ },
+ "9": {
+  "on": true,
+  "bri": 200,
+  "transition": 7,
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "bumble.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      255,
+      255,
+      255
+     ]
+    ],
+    "fx": 199,
+    "sx": 128,
+    "ix": 128,
+    "pal": 35,
+    "c1": 128,
+    "c2": 128,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Burn"
+ },
+ "10": {
+  "mainseg": 0,
+  "n": "Blade",
+  "on": true,
+  "bri": 200,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "on": true,
+    "bri": 255,
+    "n": "blade.gif",
+    "fx": 231,
+    "sx": 128,
+    "o1": false,
+    "si": 0,
+    "m12": 0,
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ]
+   }
+  ]
+ },
+ "11": {
+  "mainseg": 0,
+  "n": "Bruce",
+  "on": true,
+  "bri": 200,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "on": true,
+    "bri": 255,
+    "n": "bruces1.gif",
+    "fx": 231,
+    "sx": 128,
+    "o1": false,
+    "si": 0,
+    "m12": 0,
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ]
+   }
+  ]
+ },
+ "12": {
+  "mainseg": 0,
+  "n": "Bumble",
+  "on": true,
+  "bri": 200,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "on": true,
+    "bri": 255,
+    "n": "bumble.gif",
+    "fx": 231,
+    "sx": 128,
+    "o1": false,
+    "si": 0,
+    "m12": 0,
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ]
+   }
+  ]
+ },
+ "13": {
+  "on": true,
+  "bri": 200,
+  "transition": 7,
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "cat.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ],
+    "fx": 231,
+    "sx": 128,
+    "ix": 128,
+    "pal": 0,
+    "c1": 128,
+    "c2": 128,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Cat"
+ },
+ "14": {
+  "on": true,
+  "bri": 200,
+  "transition": 7,
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "Tina.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ],
+    "fx": 231,
+    "sx": 128,
+    "ix": 180,
+    "pal": 13,
+    "c1": 0,
+    "c2": 0,
+    "c3": 8,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": true,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Tina"
+ },
+ "15": {
+  "on": true,
+  "bri": 200,
+  "transition": 7,
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "Gru.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ],
+    "fx": 231,
+    "sx": 128,
+    "ix": 128,
+    "pal": 0,
+    "c1": 128,
+    "c2": 128,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Gru"
+ },
+ "16": {
+  "on": true,
+  "bri": 200,
+  "transition": 7,
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "bumble.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      255,
+      255,
+      255
+     ]
+    ],
+    "fx": 201,
+    "sx": 128,
+    "ix": 128,
+    "pal": 27,
+    "c1": 200,
+    "c2": 0,
+    "c3": 0,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Vortex"
+ },
+ "17": {
+  "on": true,
+  "bri": 200,
+  "transition": 7,
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "Gru2.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ],
+    "fx": 231,
+    "sx": 128,
+    "ix": 128,
+    "pal": 0,
+    "c1": 128,
+    "c2": 128,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Gru2"
+ },
+ "18": {
+  "on": true,
+  "bri": 200,
+  "transition": 7,
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "bumble.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      255,
+      255,
+      255
+     ]
+    ],
+    "fx": 207,
+    "sx": 15,
+    "ix": 200,
+    "pal": 9,
+    "c1": 32,
+    "c2": 160,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": true,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Waterfall"
+ },
+ "19": {
+  "on": true,
+  "bri": 200,
+  "transition": 7,
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "bumble.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      255,
+      255,
+      255
+     ]
+    ],
+    "fx": 124,
+    "sx": 128,
+    "ix": 128,
+    "pal": 0,
+    "c1": 128,
+    "c2": 128,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Distortion"
+ },
+ "20": {
+  "on": true,
+  "bri": 200,
+  "transition": 7,
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "bumble.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      255,
+      255,
+      255
+     ]
+    ],
+    "fx": 174,
+    "sx": 128,
+    "ix": 128,
+    "pal": 50,
+    "c1": 128,
+    "c2": 128,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Polar"
+ },
+ "21": {
+  "on": true,
+  "bri": 200,
+  "transition": 7,
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "GOT.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ],
+    "fx": 231,
+    "sx": 128,
+    "ix": 128,
+    "pal": 0,
+    "c1": 128,
+    "c2": 128,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Got"
+ },
+ "22": {
+  "on": true,
+  "bri": 200,
+  "transition": 7,
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "Yoda.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ],
+    "fx": 231,
+    "sx": 128,
+    "ix": 128,
+    "pal": 0,
+    "c1": 128,
+    "c2": 128,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Yoda"
+ },
+ "23": {
+  "on": true,
+  "bri": 200,
+  "transition": 7,
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "Bluey.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ],
+    "fx": 231,
+    "sx": 128,
+    "ix": 128,
+    "pal": 0,
+    "c1": 128,
+    "c2": 128,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Bluey"
+ },
+ "24": {
+  "on": true,
+  "bri": 200,
+  "transition": 7,
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "RanbowCat.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ],
+    "fx": 231,
+    "sx": 128,
+    "ix": 128,
+    "pal": 0,
+    "c1": 128,
+    "c2": 128,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Ranbowcat"
+ },
+ "25": {
+  "on": true,
+  "bri": 200,
+  "transition": 7,
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "RanbowCat2.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ],
+    "fx": 231,
+    "sx": 128,
+    "ix": 128,
+    "pal": 0,
+    "c1": 128,
+    "c2": 128,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Ranbowcat2"
+ },
+ "26": {
+  "on": true,
+  "bri": 200,
+  "transition": 7,
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "FireDog.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ],
+    "fx": 231,
+    "sx": 128,
+    "ix": 128,
+    "pal": 0,
+    "c1": 128,
+    "c2": 128,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Firedog"
+ },
+ "27": {
+  "on": true,
+  "bri": 200,
+  "transition": 7,
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "SleepToken.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ],
+    "fx": 231,
+    "sx": 128,
+    "ix": 128,
+    "pal": 0,
+    "c1": 128,
+    "c2": 128,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Sleeptoken"
+ },
+ "28": {
+  "on": true,
+  "bri": 200,
+  "transition": 7,
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "SleepToken2.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ],
+    "fx": 231,
+    "sx": 128,
+    "ix": 128,
+    "pal": 0,
+    "c1": 128,
+    "c2": 128,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Sleeptoken2"
+ },
+ "29": {
+  "on": true,
+  "bri": 200,
+  "transition": 7,
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "Rock-A-GoGo.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ],
+    "fx": 231,
+    "sx": 128,
+    "ix": 128,
+    "pal": 0,
+    "c1": 128,
+    "c2": 128,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Rock-A-Gogo"
+ },
+ "30": {
+  "on": true,
+  "bri": 200,
+  "transition": 7,
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "Rock-A-GoGo-2.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ],
+    "fx": 231,
+    "sx": 128,
+    "ix": 128,
+    "pal": 0,
+    "c1": 128,
+    "c2": 128,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Rock-A-Gogo-2"
+ },
+ "31": {
+  "on": true,
+  "bri": 200,
+  "transition": 7,
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "Silvion.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ],
+    "fx": 231,
+    "sx": 128,
+    "ix": 128,
+    "pal": 0,
+    "c1": 128,
+    "c2": 128,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Silvion"
+ },
+ "32": {
+  "on": true,
+  "bri": 200,
+  "transition": 7,
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "Silvion2.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ],
+    "fx": 231,
+    "sx": 128,
+    "ix": 128,
+    "pal": 0,
+    "c1": 128,
+    "c2": 128,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": false,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Silvion2"
+ },
+ "33": {
+  "on": true,
+  "bri": 200,
+  "transition": 7,
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "BlackSabbath.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ],
+    "fx": 231,
+    "sx": 128,
+    "ix": 200,
+    "pal": 9,
+    "c1": 32,
+    "c2": 160,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": true,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Blacksabbath"
+ },
+ "34": {
+  "on": true,
+  "bri": 200,
+  "transition": 7,
+  "mainseg": 0,
+  "seg": [
+   {
+    "id": 0,
+    "start": 0,
+    "stop": 64,
+    "startY": 0,
+    "stopY": 32,
+    "grp": 1,
+    "spc": 0,
+    "of": 0,
+    "on": true,
+    "frz": false,
+    "bri": 255,
+    "cct": 127,
+    "set": 0,
+    "n": "paranoid.gif",
+    "col": [
+     [
+      255,
+      255,
+      255
+     ],
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      0,
+      0,
+      0
+     ]
+    ],
+    "fx": 231,
+    "sx": 128,
+    "ix": 200,
+    "pal": 9,
+    "c1": 32,
+    "c2": 160,
+    "c3": 16,
+    "sel": true,
+    "rev": false,
+    "mi": false,
+    "rY": false,
+    "mY": false,
+    "tp": false,
+    "o1": false,
+    "o2": false,
+    "o3": true,
+    "si": 0,
+    "m12": 0
+   }
+  ],
+  "ledmap": 0,
+  "n": "Paranoid"
+ }
+}

@@ -21,7 +21,7 @@ single command.
 | **HUB75 64×32 matrix** (LED bus + 2D layout) | WLED runtime `cfg.json` only | ❌ wiped by erase → panel dark |
 | **Color order** (RGB, not the GRB default) | WLED runtime `cfg.json` (`hw.led.ins[0].order=1`) | ❌ wiped by erase → R/G swapped (red shows green) |
 | **Boot preset** (`def.ps=3` → Mountain spectrum on boot) | WLED runtime `cfg.json` | ❌ wiped by erase → panel blank on boot |
-| **Keybeat presets + GIF assets** | LittleFS (`presets.json` + 6 GIFs/`.kb`), sourced from the sibling `nowplaying` repo | ❌ wiped by erase → no looks to load |
+| **Keybeat presets + GIF assets** | LittleFS (`presets.json` + 29 GIFs/`.kb`), sourced from the sibling `nowplaying` repo | ❌ wiped by erase → no looks to load |
 
 So after a from-scratch flash, WiFi comes up by itself (that's how the script can reach
 the board), but the **matrix** must be restored and the **mic mode** asserted. That's
@@ -67,6 +67,19 @@ relative to its own path and falls back to `$KEYBEAT_DIR` if your checkout diffe
   seeded to `/npcycle.json` on LittleFS. The `room_mic_uploader` firmware reads it at boot and
   the web preset-manager rewrites it live (`POST /json/state {"npcycle":{…}}`) — reorder looks
   with no reflash. Missing/invalid → the firmware's compiled default stands (real safety net).
+- `rescue-board1.py` — **read-only** pull of the live board's library into the repo (Builder
+  step 1, 2026-10-07): byte-exact `board-snapshot-<date>/` (+ `MANIFEST.txt` with sha256;
+  never edit it), `presets-library.json` (panel slots 1–34, each sanitized to seg 0 only,
+  stage-show slots 40–45 dropped), `library.json` (`{"panel": {slot: name}, "strip": {}}` —
+  strip half is filled by Builder step 2), and the GIF + `.kb` pairs copied into
+  `../../nowplaying/firmware/board1/keybeat/assets/` — the **one** home for GIF looks, because
+  `provision-board1.sh` already reads them from there. `/cfg.json` is deliberately not
+  snapshotted (WiFi PSK); `board1-cfg-reference.json` is the redacted equivalent.
+  Known discrepancy: slot 3 (Mountain) carries `pal 74` on the board, while the design docs
+  and the provisioning check say `pal 255` (custom `/palette0.json`) — recorded as-is, not fixed.
+  Five GIFs on the board (moonman, nowplay, nprain, snoopy, zilla1) are not referenced by any
+  panel preset; they are rescued anyway.
+- `check-library.py` — self-check: 34 slots, one `id 0` segment each, every `fx 231` GIF present.
 - `board1-cfg-reference.json` — a full `GET /json/cfg` snapshot of a known-good board, for
   reference / diffing. Safe to commit: WLED redacts passwords from `/json/cfg` (only
   `pskl` *lengths* appear), and the device token is not stored in WLED config.
