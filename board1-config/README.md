@@ -52,7 +52,7 @@ pio run -e board1 -t upload --upload-port /dev/ttyACM0
 local-I2S-mic config (incl. `I2S_FastPath=0` — the silent-mic fix), and the **`def.ps=170`
 boot preset**; uploads the **library** (`presets-library.json` verbatim as `/presets.json`,
 `/palette0.json`, and the GIF + `.kb` pairs from the sibling `nowplaying` repo); reboots; and
-verifies `hw.led.total == 2254` and the boot preset (`ps == 170`, Mountain `fx == 230`,
+verifies the bus lengths sum to 2254 (`hw.led.total` is a stale compatibility field) and the boot preset (`ps == 170`, Mountain `fx == 230`,
 `pal == 74`, two segments). Slot 170 is pushed by the Pi, so on a fresh board that last check
 is a WARN until `np-bridge` has run. The config persists across normal reboots and OTA
 updates (only a *flash erase* wipes it again). The script never GETs `/json/info` — that

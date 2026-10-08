@@ -146,19 +146,20 @@ say "reboot to apply the LED bus + mic driver + boot preset"
 curl -s -m 6 -X POST "${BASE}/json/state" -H 'Content-Type: application/json' -d '{"rb":true}' >/dev/null || true
 
 say "verifying after reboot"
-# No /json/info here either: the LED total comes from /json/cfg.
+# No /json/info here either: the LED total comes from /json/cfg — summed over the buses, because
+# hw.led.total is a compatibility field WLED no longer maintains (it read 30 on a working board).
 ok=0
 for i in $(seq 1 30); do
   out=$(curl -s -m 3 "${BASE}/json/cfg" 2>/dev/null) || { sleep 2; continue; }
-  count=$(printf '%s' "$out" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("hw",{}).get("led",{}).get("total",""))' 2>/dev/null || true)
+  count=$(printf '%s' "$out" | python3 -c 'import sys,json;print(sum(i.get("len",0) for i in json.load(sys.stdin).get("hw",{}).get("led",{}).get("ins",[])))' 2>/dev/null || true)
   if [ "$count" = "$((2048 + STRIP_LEN))" ]; then ok=1; break; fi
   sleep 2
 done
 
 if [ "$ok" = 1 ]; then
-  echo "PASS: hw.led.total=$((2048 + STRIP_LEN)) (64x32 matrix + ${STRIP_LEN}-px strip)"
+  echo "PASS: bus lengths sum to $((2048 + STRIP_LEN)) (64x32 matrix + ${STRIP_LEN}-px strip)"
 else
-  echo "FAIL: matrix not active after reboot (hw.led.total != $((2048 + STRIP_LEN))). Check the HUB75 build (WLED_ENABLE_HUB75MATRIX) and bus type."
+  echo "FAIL: matrix not active after reboot (bus lengths != $((2048 + STRIP_LEN))). Check the HUB75 build (WLED_ENABLE_HUB75MATRIX) and bus type."
   exit 1
 fi
 
