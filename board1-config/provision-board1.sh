@@ -57,7 +57,7 @@ say "applying HUB75 64x32 matrix + local-I2S-mic config"
 #   starting right after the matrix at LED 2048. STRIP_LEN = pixels actually on the strip.
 #   maxpwr is the auto-brightness limiter; HUB75 is EXCLUDED from it (const.h
 #   EXCLUDE_FROM_ABL), so 1100 mA = ~1 A for the strip + WLED's fixed 100 mA ESP allowance.
-STRIP_LEN="${STRIP_LEN:-158}"
+STRIP_LEN="${STRIP_LEN:-206}"
 curl -s -m 8 -X POST "${BASE}/json/cfg" -H 'Content-Type: application/json' -d '{
   "hw":{"led":{
     "total":'"$((2048 + STRIP_LEN))"',
