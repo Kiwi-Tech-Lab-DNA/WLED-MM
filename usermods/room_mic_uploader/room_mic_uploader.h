@@ -849,80 +849,25 @@ class RoomMicUploader : public Usermod {
     static void lyricsTrampoline(void *arg) { static_cast<RoomMicUploader *>(arg)->runLyrics(); }
 
   public:
-    // Glow strip (GPIO 2, the LEDs after the 64x32 matrix). Presets saved from the web UI carry
-    // {"stop":0} for every unused segment slot, so a look change deletes the strip's segment.
-    // While it exists we snapshot its look (fx, palette, colours, sliders); when it's gone we put
-    // it back through WLED's normal JSON path. Set the strip's look in the web UI (segment after
-    // the matrix) and it sticks; the snapshot lives in /strip.json so it survives power cuts.
-    // ponytail: polled every 250ms, so a look change can blank the strip for up to ~250ms.
-    String        stripSeg = F("{\"on\":true,\"fx\":156,\"pal\":74,\"sx\":128,\"ix\":160}"); // Gravcenter
-    unsigned long stripChangedAt = 0;   // 0 = /strip.json up to date
-    uint8_t       stripSegId = 0;       // last id seen on the strip (0 = none yet)
-
-    String stripLook(Segment &sg, uint8_t i, StaticJsonDocument<1536> &d, bool withName = true) {
-      JsonObject o = d.to<JsonObject>();
-      serializeSegment(o, sg, i, true, false);                          // look only, no bounds/id
-      o.remove("id");
-      o.remove("frz");                                                  // never persist a freeze: it'd come back dark every boot
-      if (!withName) o.remove("n");
-      String s; serializeJson(o, s);
-      return s;
-    }
-
+    // Glow strip (GPIO 2, the LEDs after the 64x32 matrix) safety net. The strip's look lives in
+    // the built presets (170..209, both segments) and the Pi re-pushes them on boot; nothing is
+    // persisted here any more. If a seg-0-only web save ({"stop":0} on seg 1) still deletes the
+    // strip segment, re-create it with a fixed fallback so the strip is never dark until the next
+    // cycle preset restores the real look. ponytail: fixed Gravcenter, polled every 250 ms.
     void keepStripSegment() {
       const uint16_t first = Segment::maxWidth * Segment::maxHeight;  // matrix pixels come first
-      const uint16_t total = strip.getLengthTotal();
+      const uint16_t total = strip.getLengthTotal();                   // 2048 + 206 on the appliance
       if (!strip.isMatrix || total <= first) return;                   // no strip configured
-      static StaticJsonDocument<1536> d;                                // static: off the loop stack
-      for (uint8_t i = 0; i < strip.getSegmentsNum(); i++) {
-        Segment &sg = strip.getSegment(i);
-        if (!sg.isActive() || sg.start < first) continue;
-        stripSegId = i;
-        String now = stripLook(sg, i, d);
-        if (now != stripSeg) { stripSeg = now; stripChangedAt = millis() | 1; }
-        return;
-      }
-      // Saving LED Preferences re-bounds every segment onto the matrix, so the strip segment
-      // survives as a panel rectangle with the strip's look. Move THAT one back rather than
-      // appending a twin; a slot a preset reused for the panel won't match the look. The
-      // re-bound drops the name, so compare without it (the restore below puts it back).
-      uint8_t id = 0;
-      if (stripSegId && stripSegId < strip.getSegmentsNum()) {
-        Segment &sg = strip.getSegment(stripSegId);
-        if (sg.isActive() && !deserializeJson(d, stripSeg)) {
-          d.remove("n");
-          String want; serializeJson(d, want);
-          if (stripLook(sg, stripSegId, d, false) == want) id = stripSegId;
-        }
-      }
-      if (deserializeJson(d, stripSeg)) return;                         // corrupt snapshot: leave dark
-      JsonObject seg = d.as<JsonObject>();
-      if (!id) {                                                        // reuse a freed slot, else append
-        id = 1;
-        while (id < strip.getSegmentsNum() && strip.getSegment(id).isActive()) id++;
-      }
-      seg["id"] = id;
-      seg["start"] = first; seg["stop"] = total; seg["startY"] = 0; seg["stopY"] = 1;
-      static StaticJsonDocument<2048> st; st.clear();
-      st["seg"].to<JsonArray>().add(seg);
+      for (uint8_t i = 0; i < strip.getSegmentsNum(); i++)
+        if (strip.getSegment(i).isActive() && strip.getSegment(i).start >= first) return;
+      static StaticJsonDocument<256> d; d.clear();
+      JsonObject seg = d["seg"].to<JsonArray>().createNestedObject();
+      seg["id"] = 1; seg["start"] = first; seg["stop"] = total; seg["startY"] = 0; seg["stopY"] = 1;
+      seg["on"] = true; seg["fx"] = 156; seg["pal"] = 74; seg["sx"] = 128; seg["ix"] = 160; // Gravcenter
       auto keep = currentPreset;                                        // a seg edit marks the look "modified" (ps -1);
-      deserializeState(st.as<JsonObject>(), CALL_MODE_NO_NOTIFY);       // the knob's modeIdx sync needs the real one
+      deserializeState(d.as<JsonObject>(), CALL_MODE_NO_NOTIFY);        // the knob's modeIdx sync needs the real one
       currentPreset = keep;
-      USER_PRINTF("[strip] segment restored: %s\n", stripSeg.c_str());
-    }
-
-    void saveStripSeg() {               // debounced: slider drags don't hammer flash
-      if (!stripChangedAt || millis() - stripChangedAt < 5000) return;
-      stripChangedAt = 0;
-      File f = WLED_FS.open("/strip.json", "w");
-      if (f) { f.print(stripSeg); f.close(); }
-    }
-
-    void loadStripSeg() {
-      File f = WLED_FS.open("/strip.json", "r");
-      if (!f) return;                   // first boot: the Gravcenter default stands
-      String v = f.readString(); f.close();
-      if (v.length()) stripSeg = v;
+      USER_PRINTLN(F("[strip] segment missing -> fallback Gravcenter"));
     }
 
     void setup() override {
@@ -930,7 +875,6 @@ class RoomMicUploader : public Usermod {
       // cycleSlots/cycleCount). Missing/invalid => the compiled default stands. FS is mounted
       // by now (usermod setup() runs late in WLED boot).
       loadCycle();
-      loadStripSeg();
 
       // The inter-board UART link comes up first and independently of the (large) multipart
       // body: the heartbeat + RE-CHECK path must work even if the ingest buffer fails to alloc.
@@ -983,7 +927,7 @@ class RoomMicUploader : public Usermod {
         stateUpdated(CALL_MODE_DIRECT_CHANGE);
       }
       static unsigned long stripLast = 0;
-      if (millis() - stripLast > 250) { stripLast = millis(); keepStripSegment(); saveStripSeg(); }
+      if (millis() - stripLast > 250) { stripLast = millis(); keepStripSegment(); }
     }
 
     // The web preset-manager POSTs {"npcycle":{"cycle":[...]}} to /json/state to set the knob
