@@ -1,39 +1,141 @@
 {
  "panel": {
-  "1": "Nova",
-  "2": "Akemi",
-  "3": "Mountain",
-  "4": "Puddle",
-  "5": "Dragon",
-  "6": "Wave",
-  "7": "Ruby",
-  "8": "Waverly",
-  "9": "Burn",
-  "10": "Blade",
-  "11": "Bruce",
-  "12": "Bumble",
-  "13": "Cat",
-  "14": "Tina",
-  "15": "Gru",
-  "16": "Vortex",
-  "17": "Gru2",
-  "18": "Waterfall",
-  "19": "Distortion",
-  "20": "Polar",
-  "21": "Got",
-  "22": "Yoda",
-  "23": "Bluey",
-  "24": "Ranbowcat",
-  "25": "Ranbowcat2",
-  "26": "Firedog",
-  "27": "Sleeptoken",
-  "28": "Sleeptoken2",
-  "29": "Rock-A-Gogo",
-  "30": "Rock-A-Gogo-2",
-  "31": "Silvion",
-  "32": "Silvion2",
-  "33": "Blacksabbath",
-  "34": "Paranoid"
+  "1": {
+   "n": "Nova",
+   "audio": true
+  },
+  "2": {
+   "n": "Akemi",
+   "audio": true
+  },
+  "3": {
+   "n": "Mountain",
+   "audio": true
+  },
+  "4": {
+   "n": "Puddle",
+   "audio": true
+  },
+  "5": {
+   "n": "Dragon",
+   "audio": true
+  },
+  "6": {
+   "n": "Wave",
+   "audio": true
+  },
+  "7": {
+   "n": "Ruby",
+   "audio": true
+  },
+  "8": {
+   "n": "Waverly",
+   "audio": true
+  },
+  "9": {
+   "n": "Burn",
+   "audio": false
+  },
+  "10": {
+   "n": "Blade",
+   "audio": true
+  },
+  "11": {
+   "n": "Bruce",
+   "audio": true
+  },
+  "12": {
+   "n": "Bumble",
+   "audio": true
+  },
+  "13": {
+   "n": "Cat",
+   "audio": true
+  },
+  "14": {
+   "n": "Tina",
+   "audio": true
+  },
+  "15": {
+   "n": "Gru",
+   "audio": true
+  },
+  "16": {
+   "n": "Vortex",
+   "audio": false
+  },
+  "17": {
+   "n": "Gru2",
+   "audio": true
+  },
+  "18": {
+   "n": "Waterfall",
+   "audio": false
+  },
+  "19": {
+   "n": "Distortion",
+   "audio": false
+  },
+  "20": {
+   "n": "Polar",
+   "audio": false
+  },
+  "21": {
+   "n": "Got",
+   "audio": true
+  },
+  "22": {
+   "n": "Yoda",
+   "audio": true
+  },
+  "23": {
+   "n": "Bluey",
+   "audio": true
+  },
+  "24": {
+   "n": "Ranbowcat",
+   "audio": true
+  },
+  "25": {
+   "n": "Ranbowcat2",
+   "audio": true
+  },
+  "26": {
+   "n": "Firedog",
+   "audio": true
+  },
+  "27": {
+   "n": "Sleeptoken",
+   "audio": true
+  },
+  "28": {
+   "n": "Sleeptoken2",
+   "audio": true
+  },
+  "29": {
+   "n": "Rock-A-Gogo",
+   "audio": true
+  },
+  "30": {
+   "n": "Rock-A-Gogo-2",
+   "audio": true
+  },
+  "31": {
+   "n": "Silvion",
+   "audio": true
+  },
+  "32": {
+   "n": "Silvion2",
+   "audio": true
+  },
+  "33": {
+   "n": "Blacksabbath",
+   "audio": true
+  },
+  "34": {
+   "n": "Paranoid",
+   "audio": true
+  }
  },
  "strip": {}
 }
