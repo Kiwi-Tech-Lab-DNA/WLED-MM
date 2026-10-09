@@ -43,6 +43,7 @@ enum UartFrameType : uint8_t {
                               //          status u8 (0=ok, 1=rejected: bad slot/count/name)
   UART_AUDIO         = 0x0C,  // B1->B2 : 16 GEQ bins u8, volume u8, peak u8 — ~30 Hz, the Pi's offline
                               //          effect screen (nowplaying-project/docs/offline-mode.md). No ACK.
+  UART_POWER         = 0x0D,  // B2->B1 : on u8 (0 = standby: WLED off -> panel + strip dark). No ACK.
 };
 #define UART_AUDIO_BINS 16
 #define UART_HB_WIFI    0x01

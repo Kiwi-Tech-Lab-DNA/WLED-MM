@@ -161,6 +161,7 @@ class RoomMicUploader : public Usermod {
     // atomic float write so it applies inline. -1 == nothing pending.
     volatile int16_t pendingBri    = -1;   // 0..255 brightness to apply
     volatile int16_t pendingPreset = -1;   // preset slot to apply
+    volatile int8_t  pendingPower  = -1;   // POWER from Board 2: 0 standby, 1 on
     bool             knobGrabbed   = false; // KNOB_GRAB: Board 2 owns the mode knob (uartTask-only state)
 
     // The knob's mode-cycle order: a plain ordered list of preset slots, a RUNTIME value read from
@@ -732,6 +733,8 @@ class RoomMicUploader : public Usermod {
               // the seg byte is informational. No ACK.
               uint8_t slot = dec.payload[1];
               if (slot >= 1 && slot <= 250) pendingPreset = slot;
+            } else if (dec.type == UART_POWER && dec.len == 1) {
+              pendingPower = dec.payload[0] ? 1 : 0;
             } else if (dec.type == UART_PRESET_SAVE || dec.type == UART_PRESET_DELETE || dec.type == UART_CYCLE_SET
                        || dec.type == UART_PROVISION) {
               queueBuilderCmd(dec, buf, sizeof buf);
@@ -1088,6 +1091,11 @@ class RoomMicUploader : public Usermod {
         bri = (uint8_t)b;
         if (bri) briLast = bri;
         stateUpdated(CALL_MODE_DIRECT_CHANGE);
+      }
+      int8_t pw = pendingPower;
+      if (pw >= 0) {                                   // standby = WLED off (bri 0, briLast kept)
+        pendingPower = -1;
+        if ((bri > 0) != (pw > 0)) { toggleOnOff(); stateUpdated(CALL_MODE_BUTTON); }
       }
       runBuilderCmd();                                 // PRESET_SAVE / PRESET_DELETE / CYCLE_SET
       static unsigned long stripLast = 0;
