@@ -121,6 +121,7 @@ class RoomMicUploader : public Usermod {
     static constexpr int8_t   UART_TX_PIN   = 18;
     static constexpr uint32_t UART_BAUD     = 115200;
     static constexpr uint32_t HEARTBEAT_MS  = 1000;
+    static constexpr uint32_t AUDIO_MS      = 33;     // ~30 Hz AUDIO frames (22 B each, ~6 % of the link)
     // Poll the cadence wait in small steps so a Board 2 RE-CHECK tap fires within ~this long
     // instead of waiting out the full CADENCE_MS.
     static constexpr uint32_t CADENCE_POLL_MS = 100;
@@ -180,7 +181,7 @@ class RoomMicUploader : public Usermod {
     // answers through ack*, which the uartTask turns into the ACK frame (Serial1 stays
     // single-writer). One command in flight: the Pi waits for the ACK before the next mutating
     // frame, so a second one arriving early is dropped and the Pi's retry picks it up.
-    struct BuilderCmd { uint8_t type, slot, panel, strip, n; char name[33]; uint8_t slots[CYCLE_MAX]; };
+    struct BuilderCmd { uint8_t type, slot, panel, strip, n; char name[33]; uint8_t slots[CYCLE_MAX]; char ssid[33], psk[64]; };
     BuilderCmd       cmd;                     // written by uartTask before cmdPending, read by loop()
     volatile bool    cmdPending = false;      // uartTask -> loop()
     volatile bool    ackPending = false;      // loop() -> uartTask (published LAST)
@@ -620,6 +621,9 @@ class RoomMicUploader : public Usermod {
         ok = uart_parse_cycle_set(d, &s, &cmd.n) && cmd.n >= 1 && cmd.n <= CYCLE_MAX;
         if (ok) { memcpy(cmd.slots, s, cmd.n); for (uint8_t i = 0; i < cmd.n; i++) ok = ok && okSlot(s[i]); }
         cmd.slot = cmd.n;                              // ACK arg = n for CYCLE_SET
+      } else if (d.type == UART_PROVISION) {
+        ok = uart_parse_provision(d, cmd.ssid, cmd.psk);
+        cmd.slot = 0;                                  // ACK arg = 0 for PROVISION
       }
       if (!ok) {
         size_t n = uart_make_ack(d.type, cmd.slot, UART_ACK_REJECTED, buf, cap);
@@ -673,6 +677,18 @@ class RoomMicUploader : public Usermod {
           if (idx >= 0) modeIdx = (uint8_t)idx;
           USER_PRINTF("[builder] cycle set: %u slot(s)\n", (unsigned)cycleCount);
         } else status = UART_ACK_REJECTED;
+      } else if (cmd.type == UART_PROVISION) {
+        // WiFi from the Pi (offline-mode.md): the Pi re-pushes on every boot, so unchanged = no
+        // flash write and no reconnect. Otherwise the same path as the WiFi settings page.
+        if (strcmp(clientSSID, cmd.ssid) == 0 && strcmp(clientPass, cmd.psk) == 0) {
+          USER_PRINTF("[builder] wifi \"%s\" unchanged\n", cmd.ssid);
+        } else {
+          strlcpy(clientSSID, cmd.ssid, sizeof clientSSID);
+          strlcpy(clientPass, cmd.psk, sizeof clientPass);
+          doSerializeConfig = true;                    // cfg.json + wsec.json, written when the strip is idle
+          forceReconnect = true;
+          USER_PRINTF("[builder] wifi set: \"%s\" -> reconnecting\n", cmd.ssid);   // never the PSK
+        }
       }
       ackType = cmd.type; ackArg = cmd.slot; ackStatus = status;
       cmdPending = false;
@@ -690,7 +706,8 @@ class RoomMicUploader : public Usermod {
       knobsBegin();   // b2-13: I2C encoders share this task so Serial1 stays single-writer
       UartDecoder dec;
       uint8_t buf[UART_MAX_FRAME];
-      uint32_t last_hb = 0, last_knob = 0;
+      uint32_t last_hb = 0, last_knob = 0, last_audio = 0;
+      um_data_t *um = nullptr;
       for (;;) {
         while (Serial1.available()) {
           uartRxBytes++;
@@ -712,7 +729,8 @@ class RoomMicUploader : public Usermod {
               // the seg byte is informational. No ACK.
               uint8_t slot = dec.payload[1];
               if (slot >= 1 && slot <= 250) pendingPreset = slot;
-            } else if (dec.type == UART_PRESET_SAVE || dec.type == UART_PRESET_DELETE || dec.type == UART_CYCLE_SET) {
+            } else if (dec.type == UART_PRESET_SAVE || dec.type == UART_PRESET_DELETE || dec.type == UART_CYCLE_SET
+                       || dec.type == UART_PROVISION) {
               queueBuilderCmd(dec, buf, sizeof buf);
             }
           }
@@ -728,9 +746,17 @@ class RoomMicUploader : public Usermod {
           last_knob = now;
           pollKnobs(buf, sizeof buf);   // emits KNOB_EVENT on any turn/press
         }
+        // AUDIO: the GEQ the panel effects see, for the Pi's offline effect screen (offline-mode.md)
+        if (now - last_audio >= AUDIO_MS && (um || usermods.getUMData(&um, USERMOD_ID_AUDIOREACTIVE))) {
+          last_audio = now;
+          float vol = *(float *)um->u_data[0];
+          size_t n = uart_make_audio((uint8_t *)um->u_data[2], (uint8_t)constrain(vol, 0.0f, 255.0f),
+                                     *(bool *)um->u_data[3] ? 1 : 0, buf, sizeof buf);
+          Serial1.write(buf, n);
+        }
         if (now - last_hb >= HEARTBEAT_MS) {
           last_hb = now;
-          size_t n = uart_make_heartbeat(now / 1000, buf, sizeof buf);
+          size_t n = uart_make_heartbeat_flags(now / 1000, WLED_CONNECTED ? UART_HB_WIFI : 0, buf, sizeof buf);
           Serial1.write(buf, n);
         }
         vTaskDelay(pdMS_TO_TICKS(10));
