@@ -10,17 +10,19 @@
 #     2. AudioReactive may sit in UDP-receive mode (no local mic). The room_mic_uploader
 #        build patch already keeps SR_DMTYPE=1, but we set the mic config explicitly so a
 #        board that was ever booted in receive mode (stale sync.mode) is corrected too.
-#   WiFi is the exception — it IS baked in (CLIENT_SSID/CLIENT_PASS in the gitignored
-#   platformio_override.ini), so a fresh erase reconnects on its own; that's how this
-#   script reaches the board over HTTP.
+#   WiFi is not this script's job: the Pi pushes it over UART (PROVISION, from
+#   /etc/nowplaying/wifi.json, set on the touch screen) on every Board 1 boot, so a wired-up
+#   erased board rejoins on its own — that's how this script reaches it over HTTP.
+#   (nowplaying-project/docs/offline-mode.md.) CLIENT_SSID/CLIENT_PASS baked into the build
+#   (gitignored platformio_override.ini) still work for a board on the bench without a Pi.
 #
 # FULL PROVISIONING SEQUENCE (reproduce the appliance from scratch):
 #   1. cp usermods/room_mic_uploader/room_mic_uploader_secrets.h.example \
 #         usermods/room_mic_uploader/room_mic_uploader_secrets.h   # fill shared token
-#   2. set CLIENT_SSID/CLIENT_PASS in platformio_override.ini (board1 env)
+#   2. (bench without a Pi only) set CLIENT_SSID/CLIENT_PASS in platformio_override.ini
 #   3. pio run -e board1 -t erase  --upload-port /dev/ttyACM0
 #   4. pio run -e board1 -t upload --upload-port /dev/ttyACM0
-#   5. wait for the board to join WiFi, then:  ./board1-config/provision-board1.sh <IP>
+#   5. wire it to the Pi (or use step 2), wait for it to join WiFi, then:  ./board1-config/provision-board1.sh <IP>
 #   After this the panel renders and the mic ingests — fully functional, persists across
 #   reboots/OTA (only a flash erase wipes it, which is why this script exists).
 #
