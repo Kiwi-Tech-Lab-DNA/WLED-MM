@@ -354,7 +354,10 @@ class RoomMicUploader : public Usermod {
     // Multipart POST over a raw WiFiClient — WLED's build has no Arduino HTTPClient. The
     // whole body (preamble + WAV header + PCM + epilogue) is already assembled in `body`;
     // we just write the request line + headers + body, then read the status + JSON.
-    void postIngest() {
+    // recheck: a RE-CHECK tap. The cloud skips recognition while the current track's length hasn't
+    // run out (design §3.1 throttle) unless the upload carries recheck=1, so a tap without it can't
+    // catch a song change.
+    void postIngest(bool recheck) {
       writeWavHeader(body + headerOff, PCM_BYTES);
 
       WiFiClient client;
@@ -365,7 +368,7 @@ class RoomMicUploader : public Usermod {
       }
 
       // request line + headers
-      client.printf("POST %s HTTP/1.1\r\n", NP_INGEST_PATH);
+      client.printf("POST %s%s HTTP/1.1\r\n", NP_INGEST_PATH, recheck ? "?recheck=1" : "");
       client.printf("Host: %s:%d\r\n", NP_HOST, (int)NP_PORT);
       client.printf("Authorization: Bearer %s\r\n", NP_DEVICE_TOKEN);
       client.printf("Content-Type: multipart/form-data; boundary=%s\r\n", BOUNDARY);
@@ -467,7 +470,7 @@ class RoomMicUploader : public Usermod {
         const char *why = forced ? "RECHECK (gate bypassed)"
                         : (trig == TRIG_ONSET ? "ONSET (music started)" : "cadence");
         USER_PRINTF("[ingest] %s  RMS %.0f  -> POST\n", why, rms);
-        postIngest();
+        postIngest(forced);
       }
     }
 
