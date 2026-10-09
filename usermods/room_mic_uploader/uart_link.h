@@ -26,7 +26,7 @@
 enum UartFrameType : uint8_t {
   UART_KNOB_EVENT = 0x01,  // B1->B2 : knob u8 (0=mode,1=bright,2=gain), value i16 LE, flags u8 (bit0=press)
   UART_RECHECK    = 0x02,  // B2->B1 : empty — Board 1 fires an immediate /ingest
-  UART_PROVISION  = 0x03,  // B2->B1 : TLV [tag u8][len u8][bytes]: 1 = WiFi SSID (1..32), 2 = PSK (0..63).
+  UART_PROVISION  = 0x03,  // B2->B1 : TLV [tag u8][len u8][bytes]: 1 = WiFi SSID (0..32; 0 = forget), 2 = PSK (0..63).
                            //          ACK (arg 0). nowplaying-project/docs/offline-mode.md §Wire
   UART_RESET      = 0x04,  // either : empty (b2-10, not built here)
   UART_HEARTBEAT  = 0x05,  // both   : uptime_s u32 LE [, flags u8 — B1: bit0 = WiFi connected]
@@ -44,6 +44,7 @@ enum UartFrameType : uint8_t {
   UART_AUDIO         = 0x0C,  // B1->B2 : 16 GEQ bins u8, volume u8, peak u8 — ~30 Hz, the Pi's offline
                               //          effect screen (nowplaying-project/docs/offline-mode.md). No ACK.
   UART_POWER         = 0x0D,  // B2->B1 : on u8 (0 = standby: WLED off -> panel + strip dark). No ACK.
+  UART_WIFI          = 0x0E,  // B2->B1 : on u8 (0 = radio off, no AP, no reconnects). ACK (arg 0).
 };
 #define UART_AUDIO_BINS 16
 #define UART_HB_WIFI    0x01
@@ -199,7 +200,7 @@ static inline bool uart_parse_ack(const UartDecoder &d, uint8_t *type, uint8_t *
 // --- PROVISION (B2->B1): WiFi credentials as TLV ------------------------------
 static inline size_t uart_make_provision(const char *ssid, uint8_t ssid_len, const char *psk, uint8_t psk_len,
                                          uint8_t *out, size_t cap) {
-  if (ssid_len < 1 || ssid_len > 32 || psk_len > 63) return 0;
+  if (ssid_len > 32 || psk_len > 63) return 0;
   uint8_t p[UART_MAX_PAYLOAD];
   uint8_t n = 0;
   p[n++] = 1; p[n++] = ssid_len;
@@ -208,21 +209,24 @@ static inline size_t uart_make_provision(const char *ssid, uint8_t ssid_len, con
   for (uint8_t i = 0; i < psk_len; i++) p[n++] = (uint8_t)psk[i];
   return uart_encode(UART_PROVISION, p, n, out, cap);
 }
-// ssid[33] / psk[64] come out NUL-terminated. Unknown tags are skipped; an SSID is required.
+// ssid[33] / psk[64] come out NUL-terminated. Unknown tags are skipped; an SSID tag is required
+// (empty = forget the network).
 static inline bool uart_parse_provision(const UartDecoder &d, char ssid[33], char psk[64]) {
   if (d.type != UART_PROVISION) return false;
   ssid[0] = psk[0] = '\0';
+  bool have = false;
   for (uint8_t i = 0; i + 2 <= d.len;) {
     uint8_t tag = d.payload[i], n = d.payload[i + 1];
     i += 2;
     if (i + n > d.len) return false;                       // TLV runs past LEN
     if (tag == 1 || tag == 2) {
       if (n > (tag == 1 ? 32 : 63)) return false;
+      have |= tag == 1;
       char *dst = tag == 1 ? ssid : psk;
       for (uint8_t k = 0; k < n; k++) dst[k] = (char)d.payload[i + k];
       dst[n] = '\0';
     }
     i += n;
   }
-  return ssid[0] != '\0';
+  return have;
 }

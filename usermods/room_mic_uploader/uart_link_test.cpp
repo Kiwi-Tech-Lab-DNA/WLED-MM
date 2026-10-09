@@ -118,7 +118,8 @@ int main() {
   assert(uart_parse_provision(d, ssid, psk) && strcmp(ssid, s32) == 0 && strcmp(psk, p63) == 0);
   assert(roundtrip(d, buf, uart_make_provision("open", 4, "", 0, buf, sizeof buf)));   // open network
   assert(uart_parse_provision(d, ssid, psk) && strcmp(ssid, "open") == 0 && psk[0] == '\0');
-  assert(uart_make_provision("", 0, "x", 1, buf, sizeof buf) == 0);                    // SSID required
+  assert(roundtrip(d, buf, uart_make_provision("", 0, "", 0, buf, sizeof buf)));       // empty SSID = forget
+  assert(uart_parse_provision(d, ssid, psk) && ssid[0] == '\0' && psk[0] == '\0');
   assert(uart_make_provision(s32, 33, "x", 1, buf, sizeof buf) == 0);                  // SSID > 32
   uint8_t runs[4] = { 1, 9, 'a', 'b' };                                               // TLV past LEN
   assert(roundtrip(d, buf, uart_encode(UART_PROVISION, runs, 4, buf, sizeof buf)) && !uart_parse_provision(d, ssid, psk));

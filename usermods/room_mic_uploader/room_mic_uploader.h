@@ -628,6 +628,10 @@ class RoomMicUploader : public Usermod {
       } else if (d.type == UART_PROVISION) {
         ok = uart_parse_provision(d, cmd.ssid, cmd.psk);
         cmd.slot = 0;                                  // ACK arg = 0 for PROVISION
+      } else if (d.type == UART_WIFI) {
+        ok = d.len == 1;
+        cmd.n = d.payload[0];
+        cmd.slot = 0;
       }
       if (!ok) {
         size_t n = uart_make_ack(d.type, cmd.slot, UART_ACK_REJECTED, buf, cap);
@@ -693,6 +697,21 @@ class RoomMicUploader : public Usermod {
           forceReconnect = true;
           USER_PRINTF("[builder] wifi set: \"%s\" -> reconnecting\n", cmd.ssid);   // never the PSK
         }
+      } else if (cmd.type == UART_WIFI) {
+        // WiFi off from the Pi's Settings: wifiOff makes WLED skip handleConnection() (no reconnect,
+        // no fallback AP). RAM only: the Pi re-sends it after every Board 1 boot.
+        bool off = !cmd.n;
+        if (off != wifiOff) {
+          wifiOff = off;
+          if (off) {
+            dnsServer.stop();
+            WiFi.softAPdisconnect(true);
+            apActive = false;
+            WiFi.disconnect(true);
+            WiFi.mode(WIFI_OFF);
+          } else forceReconnect = true;
+        }
+        USER_PRINTF("[builder] wifi radio %s\n", off ? "off" : "on");
       }
       ackType = cmd.type; ackArg = cmd.slot; ackStatus = status;
       cmdPending = false;
@@ -736,7 +755,7 @@ class RoomMicUploader : public Usermod {
             } else if (dec.type == UART_POWER && dec.len == 1) {
               pendingPower = dec.payload[0] ? 1 : 0;
             } else if (dec.type == UART_PRESET_SAVE || dec.type == UART_PRESET_DELETE || dec.type == UART_CYCLE_SET
-                       || dec.type == UART_PROVISION) {
+                       || dec.type == UART_PROVISION || dec.type == UART_WIFI) {
               queueBuilderCmd(dec, buf, sizeof buf);
             }
           }

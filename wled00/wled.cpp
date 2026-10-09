@@ -134,7 +134,7 @@ void WLED::loop()
   #ifndef WLED_DISABLE_INFRARED
   handleIR();        // 2nd call to function needed for ESP32 to return valid results -- should be good for ESP8266, too
   #endif
-  handleConnection();
+  if (!wifiOff) handleConnection();   // nowplaying: WiFi switched off from Board 2
   #ifndef WLED_DISABLE_ESPNOW
   handleRemote();
   #endif
