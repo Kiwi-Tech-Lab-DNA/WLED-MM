@@ -2,8 +2,9 @@
 
 #include "wled.h"
 #include <WiFiClient.h>
+#include <WiFiClientSecure.h>
 #include "esp_heap_caps.h"
-#include "room_mic_uploader_secrets.h"   // NP_BASE_URL + NP_DEVICE_TOKEN (gitignored)
+#include "np_cloud_ca.h"                  // NP_CLOUD_CA: Let's Encrypt roots for the HTTPS cloud
 #include "uart_link.h"                    // b2-13 inter-board UART1 frame codec (shared with Board 2)
 #include "np_lyrics.h"                    // P1: pure timing model + word font/color (host-tested)
 #include "np_encoder.h"                   // b2-13 knobs: pure quadrature decode (host-tested)
@@ -182,10 +183,25 @@ class RoomMicUploader : public Usermod {
     // answers through ack*, which the uartTask turns into the ACK frame (Serial1 stays
     // single-writer). One command in flight: the Pi waits for the ACK before the next mutating
     // frame, so a second one arriving early is dropped and the Pi's retry picks it up.
-    struct BuilderCmd { uint8_t type, slot, panel, strip, n; char name[33]; uint8_t slots[CYCLE_MAX]; char ssid[33], psk[64]; };
+    struct BuilderCmd { uint8_t type, slot, panel, strip, n; char name[33]; uint8_t slots[CYCLE_MAX]; char ssid[33], psk[64]; char base[97], token[81]; };
     BuilderCmd       cmd;                     // written by uartTask before cmdPending, read by loop()
     volatile bool    cmdPending = false;      // uartTask -> loop()
     volatile bool    ackPending = false;      // loop() -> uartTask (published LAST)
+
+    // Cloud endpoint + device token: pushed by the Pi over UART CLOUD (its /etc/nowplaying/
+    // config.json is the one copy of the secret). RAM only — the Pi re-pushes on every Board 1
+    // boot; until it lands, ingest + lyrics skip. loop() stages `cloudNext`; the net tasks adopt it
+    // at their next request (cloudConnect), so a push never lands mid-request.
+    struct CloudCfg { bool tls; uint16_t port; char host[64], path[33], token[81]; };
+    CloudCfg          cloud = {}, cloudNext = {};   // host[0] == 0: not configured
+    volatile bool     cloudNextReady = false;
+    portMUX_TYPE      cloudSpin = portMUX_INITIALIZER_UNLOCKED;
+    // One cloud request at a time: a TLS session needs ~40 KB of internal heap, and concurrent
+    // handshakes (ingest + lyrics) fail intermittently (esp32-tls-heap-contention). Held for the
+    // whole request, so a lyrics poll waits out a slow ingest — words extrapolate meanwhile.
+    SemaphoreHandle_t netMux = nullptr;
+    WiFiClientSecure  tlsClient;
+    WiFiClient        plainClient;
     uint8_t          ackType = 0, ackArg = 0, ackStatus = 0;
     uint32_t         lastPiHeartbeat = 0;     // uartTask-only: KNOB_GRAB auto-release timer
     // Link diagnostics, published in /json/state as "npuart": the only way to see the B2->B1
@@ -352,6 +368,42 @@ class RoomMicUploader : public Usermod {
       return sqrt(sumSq / ONSET_SAMPLES);
     }
 
+    // Take netMux, adopt a freshly pushed cloud config, connect, and write the request line +
+    // Host + Authorization headers (the caller adds the rest). nullptr (netMux released) = no
+    // config yet / connect failed. Callers must cloudDone() a non-null client.
+    // `path` is relative to the base URL's path ("/ingest" -> "/api/ingest").
+    WiFiClient *cloudOpen(const char *method, const char *path, const char *tag) {
+      xSemaphoreTake(netMux, portMAX_DELAY);
+      portENTER_CRITICAL(&cloudSpin);
+      if (cloudNextReady) { cloud = cloudNext; cloudNextReady = false; }
+      portEXIT_CRITICAL(&cloudSpin);
+      if (!cloud.host[0]) {
+        USER_PRINTF("[%s] no cloud config yet (the Pi pushes it over UART)\n", tag);
+        xSemaphoreGive(netMux);
+        return nullptr;
+      }
+      WiFiClient *c = &plainClient;
+      if (cloud.tls) {
+        tlsClient.setCACert(NP_CLOUD_CA);
+        tlsClient.setHandshakeTimeout(10);    // seconds (default 120)
+        c = &tlsClient;
+      }
+      c->setTimeout(4);                       // SECONDS in core 2.0.x (was 4000 = 67 min)
+      if (!c->connect(cloud.host, cloud.port, 8000)) {   // ms
+        USER_PRINTF("[%s] connect %s:%u failed (heap %u)\n", tag, cloud.host, cloud.port,
+                    (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+        c->stop();
+        xSemaphoreGive(netMux);
+        return nullptr;
+      }
+      c->printf("%s %s%s HTTP/1.1\r\n", method, cloud.path, path);
+      if (cloud.port == (cloud.tls ? 443 : 80)) c->printf("Host: %s\r\n", cloud.host);
+      else c->printf("Host: %s:%u\r\n", cloud.host, cloud.port);
+      c->printf("Authorization: Bearer %s\r\n", cloud.token);
+      return c;
+    }
+    void cloudDone(WiFiClient *c) { c->stop(); xSemaphoreGive(netMux); }
+
     // Multipart POST over a raw WiFiClient — WLED's build has no Arduino HTTPClient. The
     // whole body (preamble + WAV header + PCM + epilogue) is already assembled in `body`;
     // we just write the request line + headers + body, then read the status + JSON.
@@ -361,17 +413,9 @@ class RoomMicUploader : public Usermod {
     void postIngest(bool recheck) {
       writeWavHeader(body + headerOff, PCM_BYTES);
 
-      WiFiClient client;
-      client.setTimeout(4000);   // bound connect/socket blocks under the 5 s task watchdog
-      if (!client.connect(NP_HOST, NP_PORT)) {
-        USER_PRINTF("[ingest] connect %s:%d failed\n", NP_HOST, (int)NP_PORT);
-        return;
-      }
-
-      // request line + headers
-      client.printf("POST %s%s HTTP/1.1\r\n", NP_INGEST_PATH, recheck ? "?recheck=1" : "");
-      client.printf("Host: %s:%d\r\n", NP_HOST, (int)NP_PORT);
-      client.printf("Authorization: Bearer %s\r\n", NP_DEVICE_TOKEN);
+      WiFiClient *cp = cloudOpen("POST", recheck ? "/ingest?recheck=1" : "/ingest", "ingest");
+      if (!cp) return;
+      WiFiClient &client = *cp;
       client.printf("Content-Type: multipart/form-data; boundary=%s\r\n", BOUNDARY);
       client.printf("Content-Length: %u\r\n", (unsigned)bodyTotal);
       client.print(F("Connection: close\r\n\r\n"));
@@ -411,7 +455,7 @@ class RoomMicUploader : public Usermod {
         }
         vTaskDelay(pdMS_TO_TICKS(5));
       }
-      client.stop();
+      cloudDone(cp);
       resp[rlen] = '\0';
 
       // status line = up to the first CR/LF; JSON body = after the blank line
@@ -419,7 +463,7 @@ class RoomMicUploader : public Usermod {
       if (eol) *eol = '\0';
       const char *body = strstr(rlen ? (eol ? eol + 1 : resp) : "", "\r\n\r\n");
       body = body ? body + 4 : "";
-      USER_PRINTF("[ingest] POST %s -> %s | %s\n", NP_INGEST_PATH, resp, body);
+      USER_PRINTF("[ingest] POST /ingest -> %s | %s\n", resp, body);
     }
 
     enum Trigger { TRIG_CADENCE, TRIG_RECHECK, TRIG_ONSET };
@@ -628,6 +672,9 @@ class RoomMicUploader : public Usermod {
       } else if (d.type == UART_PROVISION) {
         ok = uart_parse_provision(d, cmd.ssid, cmd.psk);
         cmd.slot = 0;                                  // ACK arg = 0 for PROVISION
+      } else if (d.type == UART_CLOUD) {
+        ok = uart_parse_cloud(d, cmd.base, cmd.token);
+        cmd.slot = 0;
       } else if (d.type == UART_WIFI) {
         ok = d.len == 1;
         cmd.n = d.payload[0];
@@ -712,6 +759,15 @@ class RoomMicUploader : public Usermod {
           } else forceReconnect = true;
         }
         USER_PRINTF("[builder] wifi radio %s\n", off ? "off" : "on");
+      } else if (cmd.type == UART_CLOUD) {
+        CloudCfg c = {};
+        if (np_split_url(cmd.base, &c.tls, c.host, &c.port, c.path)) {
+          strlcpy(c.token, cmd.token, sizeof c.token);
+          portENTER_CRITICAL(&cloudSpin);
+          cloudNext = c; cloudNextReady = true;
+          portEXIT_CRITICAL(&cloudSpin);
+          USER_PRINTF("[cloud] %s://%s:%u%s\n", c.tls ? "https" : "http", c.host, c.port, c.path);   // never the token
+        } else status = UART_ACK_REJECTED;
       }
       ackType = cmd.type; ackArg = cmd.slot; ackStatus = status;
       cmdPending = false;
@@ -755,7 +811,7 @@ class RoomMicUploader : public Usermod {
             } else if (dec.type == UART_POWER && dec.len == 1) {
               pendingPower = dec.payload[0] ? 1 : 0;
             } else if (dec.type == UART_PRESET_SAVE || dec.type == UART_PRESET_DELETE || dec.type == UART_CYCLE_SET
-                       || dec.type == UART_PROVISION || dec.type == UART_WIFI) {
+                       || dec.type == UART_PROVISION || dec.type == UART_WIFI || dec.type == UART_CLOUD) {
               queueBuilderCmd(dec, buf, sizeof buf);
             }
           }
@@ -799,7 +855,7 @@ class RoomMicUploader : public Usermod {
     // write), so a core-1 reader never iterates a vector mid-rebuild. Rebuilds only
     // happen on a track change (seconds apart) while a draw frame is microseconds —
     // two rebuilds would have to land inside one frame to race, which can't happen.
-    static constexpr const char *NP_NOWPLAYING_PATH = "/api/nowplaying";
+    static constexpr const char *NP_NOWPLAYING_PATH = "/nowplaying";
     static constexpr uint32_t LYRICS_POLL_MS = 2000;   // re-anchor cadence; words extrapolate between
     static constexpr size_t   LYRICS_NETCAP  = 16384;  // ponytail: response scratch ceiling; bump if a
                                                        // song's yrc exceeds ~16 KB (then the body truncates)
@@ -868,12 +924,9 @@ class RoomMicUploader : public Usermod {
     // Same non-blocking read discipline as postIngest() so it can't starve core-0 IDLE.
     char *httpGet(const char *path) {
       if (!netBuf) return nullptr;
-      WiFiClient client;
-      client.setTimeout(4000);
-      if (!client.connect(NP_HOST, NP_PORT)) { USER_PRINTF("[lyrics] connect %s:%d failed\n", NP_HOST, (int)NP_PORT); return nullptr; }
-      client.printf("GET %s HTTP/1.1\r\n", path);
-      client.printf("Host: %s:%d\r\n", NP_HOST, (int)NP_PORT);
-      client.printf("Authorization: Bearer %s\r\n", NP_DEVICE_TOKEN);
+      WiFiClient *cp = cloudOpen("GET", path, "lyrics");
+      if (!cp) return nullptr;
+      WiFiClient &client = *cp;
       client.print(F("Connection: close\r\n\r\n"));
 
       // Read until the server closes AND the buffer is drained. The cloud sends
@@ -898,7 +951,7 @@ class RoomMicUploader : public Usermod {
           vTaskDelay(pdMS_TO_TICKS(5));
         }
       }
-      client.stop();
+      cloudDone(cp);
       netBuf[rlen] = '\0';
 
       char *hdrEnd = strstr(netBuf, "\r\n\r\n");
@@ -925,7 +978,7 @@ class RoomMicUploader : public Usermod {
     }
 
     void fetchLyrics(const std::string &trackId, double dur) {
-      std::string path = "/api/lyrics?track_id=" + urlencode(trackId);
+      std::string path = "/lyrics?track_id=" + urlencode(trackId);
       char *body = httpGet(path.c_str());
       if (!body) return;
       // zero-copy parse: the lyrics string references netBuf, valid until the next GET.
@@ -1063,6 +1116,7 @@ class RoomMicUploader : public Usermod {
 
       // The inter-board UART link comes up first and independently of the (large) multipart
       // body: the heartbeat + RE-CHECK path must work even if the ingest buffer fails to alloc.
+      netMux = xSemaphoreCreateMutex();   // before any task that talks to the cloud
       xTaskCreatePinnedToCore(uartTrampoline, "npUart", 4096, this, 1, &uartTask, 0);
 
       if (!allocBody()) return;

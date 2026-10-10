@@ -17,8 +17,7 @@
 #   (gitignored platformio_override.ini) still work for a board on the bench without a Pi.
 #
 # FULL PROVISIONING SEQUENCE (reproduce the appliance from scratch):
-#   1. cp usermods/room_mic_uploader/room_mic_uploader_secrets.h.example \
-#         usermods/room_mic_uploader/room_mic_uploader_secrets.h   # fill shared token
+#   1. (nothing — the cloud URL + device token come from the Pi over UART CLOUD on every boot)
 #   2. (bench without a Pi only) set CLIENT_SSID/CLIENT_PASS in platformio_override.ini
 #   3. pio run -e board1 -t erase  --upload-port /dev/ttyACM0
 #   4. pio run -e board1 -t upload --upload-port /dev/ttyACM0

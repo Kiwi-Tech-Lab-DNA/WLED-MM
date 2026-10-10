@@ -15,7 +15,7 @@ single command.
 | Setting | Where it lives | Survives a flash erase? |
 |---|---|---|
 | WiFi creds | `-D CLIENT_SSID/CLIENT_PASS` in `platformio_override.ini` (gitignored) | ✅ baked into the binary |
-| Device token | `room_mic_uploader_secrets.h` (gitignored) | ✅ baked into the binary |
+| Cloud URL + device token | the Pi's `/etc/nowplaying/config.json` (`base`, `token`), pushed over UART `CLOUD` on every board boot; RAM only on the board | ✅ re-pushed by the Pi |
 | **Knob encoders** (3× Seesaw, b2-13) | `lib_deps` (Adafruit seesaw + BusIO) in `[env:board1]` of `platformio_override.ini` (gitignored) — the `room_mic_uploader` usermod reads them on Wire1 (SDA47/SCL48) | ✅ baked into the binary |
 | Audioreactive **local mic** (vs UDP-receive) | build patch keeps `SR_DMTYPE=1` (`pio-scripts/patch_audioreactive.py`) + runtime `sync.mode` | ⚠️ binary is correct; runtime `sync.mode` can be stale |
 | **HUB75 64×32 matrix** (LED bus + 2D layout) | WLED runtime `cfg.json` only | ❌ wiped by erase → panel dark |
@@ -31,14 +31,11 @@ all `provision-board1.sh` does.
 ## Reproduce Board 1 from scratch
 
 ```sh
-# 0. secrets (once): shared device token + WiFi
-cp ../usermods/room_mic_uploader/room_mic_uploader_secrets.h.example \
-   ../usermods/room_mic_uploader/room_mic_uploader_secrets.h     # fill NP_DEVICE_TOKEN (== Board 2's)
+# 0. secrets (once): WiFi (the device token comes from the Pi over UART)
 #    set CLIENT_SSID / CLIENT_PASS in platformio_override.ini (board1 env)
-#    the [env:board1] override must also carry the knob deps (gitignored, so not in a clone):
+#    the [env:board1] override must also carry the HTTPS dep (gitignored, so not in a clone):
 #      lib_deps = ${env:esp32S3_8MB_PSRAM_M_opi.lib_deps}
-#        adafruit/Adafruit seesaw Library @ ^1.7.0
-#        adafruit/Adafruit BusIO @ ^1.16.0
+#        WiFiClientSecure          # HTTPS to the cloud — PlatformIO's LDF won't find it on its own
 
 # 1. build + flash (Board 1 = /dev/ttyACM0)
 pio run -e board1 -t erase  --upload-port /dev/ttyACM0     # clears any stale/corrupt cfg

@@ -1,5 +1,5 @@
 // Host self-check for uart_link.h: encode -> decode round-trip of every frame type, CRC
-// rejection, and the 128-byte payload cap. Build + run:
+// rejection, and the 192-byte payload cap. Build + run:
 //   g++ -std=c++11 -o /tmp/uart_link_test uart_link_test.cpp && /tmp/uart_link_test
 #include <assert.h>
 #include <stdio.h>
@@ -48,10 +48,10 @@ int main() {
   assert(roundtrip(d, buf, uart_make_preset_save(171, 4, 121, "", 0, buf, sizeof buf)));
   assert(uart_parse_preset_save(d, &slot, &panel, &strip, name, sizeof name) && name[0] == '\0');
   // a name longer than the parser's buffer is truncated, never overrun
-  char big[126]; memset(big, 'x', 125); big[125] = '\0';
-  assert(uart_make_preset_save(172, 1, 1, big, 126, buf, sizeof buf) == 0);   // 3 + 126 > 128: refused
-  n = uart_make_preset_save(172, 1, 1, big, 125, buf, sizeof buf);            // 3 + 125 == 128: the cap
-  assert(n == 4 + 128 && roundtrip(d, buf, n));
+  char big[190]; memset(big, 'x', 189); big[189] = '\0';
+  assert(uart_make_preset_save(172, 1, 1, big, 190, buf, sizeof buf) == 0);   // 3 + 190 > 192: refused
+  n = uart_make_preset_save(172, 1, 1, big, 189, buf, sizeof buf);            // 3 + 189 == 192: the cap
+  assert(n == 4 + 192 && roundtrip(d, buf, n));
   char small[8];
   assert(uart_parse_preset_save(d, &slot, &panel, &strip, small, sizeof small));
   assert(strlen(small) == 7 && small[0] == 'x');
@@ -68,7 +68,7 @@ int main() {
   const uint8_t *slots; uint8_t cn;
   assert(roundtrip(d, buf, n) && uart_parse_cycle_set(d, &slots, &cn) && cn == 40 && slots[39] == 209);
   assert(roundtrip(d, buf, uart_make_cycle_set(cyc, 1, buf, sizeof buf)) && uart_parse_cycle_set(d, &slots, &cn) && cn == 1);
-  assert(uart_make_cycle_set(cyc, 128, buf, sizeof buf) == 0);   // 1 + 128 > 128
+  assert(uart_make_cycle_set(cyc, 192, buf, sizeof buf) == 0);   // 1 + 192 > 192
   // count byte disagreeing with LEN is rejected by the parser
   uint8_t bad[3] = { 5, 1, 2 };
   assert(roundtrip(d, buf, uart_encode(UART_CYCLE_SET, bad, 3, buf, sizeof buf)));
@@ -80,12 +80,12 @@ int main() {
   uint8_t at, aa, as;
   assert(roundtrip(d, buf, n) && uart_parse_ack(d, &at, &aa, &as) && at == 0x08 && aa == 170 && as == 0);
 
-  // 128-byte cap: exactly 128 encodes, 129 does not; the decoder drops LEN > 128
-  uint8_t full[129]; memset(full, 0xAB, sizeof full);
-  assert(uart_encode(0x42, full, 128, buf, sizeof buf) == 132);
-  assert(uart_encode(0x42, full, 129, buf, sizeof buf) == 0);
-  assert(roundtrip(d, buf, 132) && d.len == 128 && d.payload[127] == 0xAB);
-  uint8_t oversize[4] = { UART_SYNC, 0x42, 129, 0 };
+  // 192-byte cap: exactly 192 encodes, 193 does not; the decoder drops LEN > 192
+  uint8_t full[193]; memset(full, 0xAB, sizeof full);
+  assert(uart_encode(0x42, full, 192, buf, sizeof buf) == 196);
+  assert(uart_encode(0x42, full, 193, buf, sizeof buf) == 0);
+  assert(roundtrip(d, buf, 196) && d.len == 192 && d.payload[191] == 0xAB);
+  uint8_t oversize[4] = { UART_SYNC, 0x42, 193, 0 };
   for (int i = 0; i < 4; i++) assert(!d.feed(oversize[i]));
   assert(d.state == 0);
 
@@ -125,6 +125,28 @@ int main() {
   assert(roundtrip(d, buf, uart_encode(UART_PROVISION, runs, 4, buf, sizeof buf)) && !uart_parse_provision(d, ssid, psk));
   uint8_t nossid[3] = { 2, 1, 'x' };
   assert(roundtrip(d, buf, uart_encode(UART_PROVISION, nossid, 3, buf, sizeof buf)) && !uart_parse_provision(d, ssid, psk));
+
+  // CLOUD: max base + max token round-trip; both tags required
+  char base[97], tok[81];
+  uint8_t cp[180]; k = 0;
+  cp[k++] = 1; cp[k++] = 96; for (int i = 0; i < 96; i++) cp[k++] = (uint8_t)('a' + i % 26);
+  cp[k++] = 2; cp[k++] = 80; for (int i = 0; i < 80; i++) cp[k++] = (uint8_t)(i % 2 ? '|' : '~');
+  assert(roundtrip(d, buf, uart_encode(UART_CLOUD, cp, k, buf, sizeof buf)));
+  assert(uart_parse_cloud(d, base, tok) && strlen(base) == 96 && strlen(tok) == 80 && tok[0] == '~');
+  uint8_t notok[5] = { 1, 3, 'a', 'b', 'c' };
+  assert(roundtrip(d, buf, uart_encode(UART_CLOUD, notok, 5, buf, sizeof buf)) && !uart_parse_cloud(d, base, tok));
+
+  // np_split_url: the Pi's config.json `base`
+  bool tls; char host[64], path[33]; uint16_t port;
+  assert(np_split_url("https://nowplaying.kiwitechlab.net/api", &tls, host, &port, path));
+  assert(tls && port == 443 && !strcmp(host, "nowplaying.kiwitechlab.net") && !strcmp(path, "/api"));
+  assert(np_split_url("http://192.168.1.186:8000/api/", &tls, host, &port, path));
+  assert(!tls && port == 8000 && !strcmp(host, "192.168.1.186") && !strcmp(path, "/api"));
+  assert(np_split_url("http://h", &tls, host, &port, path) && port == 80 && path[0] == '\0');
+  assert(!np_split_url("ftp://h/api", &tls, host, &port, path));
+  assert(!np_split_url("https:///api", &tls, host, &port, path));
+  assert(!np_split_url("http://h:0/api", &tls, host, &port, path));
+  assert(!np_split_url("http://h:80x/api", &tls, host, &port, path));
 
   printf("uart_link: all checks passed\n");
   return 0;

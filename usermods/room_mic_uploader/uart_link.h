@@ -18,9 +18,11 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
 
 #define UART_SYNC          0x7E
-#define UART_MAX_PAYLOAD   128    // PROVISION (2+32 + 2+63 = 99) is the largest
+#define UART_MAX_PAYLOAD   192    // CLOUD (2+96 + 2+80 = 180) is the largest
 #define UART_MAX_FRAME     (UART_MAX_PAYLOAD + 4)  // SYNC+TYPE+LEN+payload+CRC
 
 enum UartFrameType : uint8_t {
@@ -45,6 +47,8 @@ enum UartFrameType : uint8_t {
                               //          effect screen (nowplaying-project/docs/offline-mode.md). No ACK.
   UART_POWER         = 0x0D,  // B2->B1 : on u8 (0 = standby: WLED off -> panel + strip dark). No ACK.
   UART_WIFI          = 0x0E,  // B2->B1 : on u8 (0 = radio off, no AP, no reconnects). ACK (arg 0).
+  UART_CLOUD         = 0x0F,  // B2->B1 : TLV: 1 = API base URL (1..96, "https://host/api"), 2 = device
+                              //          token (1..80). RAM only — re-pushed on every B1 boot. ACK (arg 0).
 };
 #define UART_AUDIO_BINS 16
 #define UART_HB_WIFI    0x01
@@ -229,4 +233,47 @@ static inline bool uart_parse_provision(const UartDecoder &d, char ssid[33], cha
     i += n;
   }
   return have;
+}
+
+// --- CLOUD (B2->B1): the cloud API base + device token as TLV --------------------
+// Both tags required and non-empty; base[97] / token[81] come out NUL-terminated.
+static inline bool uart_parse_cloud(const UartDecoder &d, char base[97], char token[81]) {
+  if (d.type != UART_CLOUD) return false;
+  base[0] = token[0] = '\0';
+  for (uint8_t i = 0; i + 2 <= d.len;) {
+    uint8_t tag = d.payload[i], n = d.payload[i + 1];
+    i += 2;
+    if (i + n > d.len) return false;
+    if (tag == 1 || tag == 2) {
+      if (n > (tag == 1 ? 96 : 80)) return false;
+      char *dst = tag == 1 ? base : token;
+      for (uint8_t k = 0; k < n; k++) dst[k] = (char)d.payload[i + k];
+      dst[n] = '\0';
+    }
+    i += n;
+  }
+  return base[0] && token[0];
+}
+
+// Split a CLOUD base URL "http[s]://host[:port][/path]" for the raw-socket client. Trailing '/'
+// is dropped from path ("" = none). False on any other shape (no scheme, empty host, bad port).
+static inline bool np_split_url(const char *url, bool *tls, char host[64], uint16_t *port, char path[33]) {
+  const char *p;
+  if (!strncmp(url, "https://", 8))     { *tls = true;  *port = 443; p = url + 8; }
+  else if (!strncmp(url, "http://", 7)) { *tls = false; *port = 80;  p = url + 7; }
+  else return false;
+  size_t h = strcspn(p, ":/");
+  if (h == 0 || h > 63) return false;
+  memcpy(host, p, h); host[h] = '\0'; p += h;
+  if (*p == ':') {
+    char *e; long v = strtol(p + 1, &e, 10);
+    if (e == p + 1 || v < 1 || v > 65535) return false;
+    *port = (uint16_t)v; p = e;
+  }
+  if (*p && *p != '/') return false;
+  size_t n = strlen(p);
+  while (n && p[n - 1] == '/') n--;
+  if (n > 32) return false;
+  memcpy(path, p, n); path[n] = '\0';
+  return true;
 }
