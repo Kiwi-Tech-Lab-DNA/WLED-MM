@@ -288,6 +288,7 @@ class RoomMicUploader : public Usermod {
     // (same loose hand-off as Board 2's g_recheck_request).
     TaskHandle_t  uartTask       = nullptr;
     volatile bool recheckRequest = false;
+    volatile bool ingestBusy     = false;   // ingest task writes, UART task reads into HEARTBEAT bit1
     // silence->music edge tracker for the onset trigger (ingest-task-local, no cross-task access)
     bool roomWasSilent = true;
 
@@ -515,7 +516,9 @@ class RoomMicUploader : public Usermod {
         const char *why = forced ? "RECHECK (gate bypassed)"
                         : (trig == TRIG_ONSET ? "ONSET (music started)" : "cadence");
         USER_PRINTF("[ingest] %s  RMS %.0f  -> POST\n", why, rms);
+        ingestBusy = true;
         postIngest(forced);
+        ingestBusy = false;
       }
     }
 
@@ -786,6 +789,7 @@ class RoomMicUploader : public Usermod {
       UartDecoder dec;
       uint8_t buf[UART_MAX_FRAME];
       uint32_t last_hb = 0, last_knob = 0, last_audio = 0;
+      uint8_t  lastHbFlags = 0;
       um_data_t *um = nullptr;
       for (;;) {
         while (Serial1.available()) {
@@ -835,9 +839,11 @@ class RoomMicUploader : public Usermod {
                                      *(bool *)um->u_data[3] ? 1 : 0, buf, sizeof buf);
           Serial1.write(buf, n);
         }
-        if (now - last_hb >= HEARTBEAT_MS) {
+        uint8_t hbFlags = (WLED_CONNECTED ? UART_HB_WIFI : 0) | (ingestBusy ? UART_HB_INGEST : 0);
+        if (now - last_hb >= HEARTBEAT_MS || hbFlags != lastHbFlags) {   // a flag change goes out at once
           last_hb = now;
-          size_t n = uart_make_heartbeat_flags(now / 1000, WLED_CONNECTED ? UART_HB_WIFI : 0, buf, sizeof buf);
+          lastHbFlags = hbFlags;
+          size_t n = uart_make_heartbeat_flags(now / 1000, hbFlags, buf, sizeof buf);
           Serial1.write(buf, n);
         }
         vTaskDelay(pdMS_TO_TICKS(10));

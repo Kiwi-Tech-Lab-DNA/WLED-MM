@@ -31,7 +31,7 @@ enum UartFrameType : uint8_t {
   UART_PROVISION  = 0x03,  // B2->B1 : TLV [tag u8][len u8][bytes]: 1 = WiFi SSID (0..32; 0 = forget), 2 = PSK (0..63).
                            //          ACK (arg 0). nowplaying-project/docs/offline-mode.md §Wire
   UART_RESET      = 0x04,  // either : empty (b2-10, not built here)
-  UART_HEARTBEAT  = 0x05,  // both   : uptime_s u32 LE [, flags u8 — B1: bit0 = WiFi connected]
+  UART_HEARTBEAT  = 0x05,  // both   : uptime_s u32 LE [, flags u8 — B1: bit0 = WiFi connected, bit1 = ingest in flight]
                            //          (a 4-byte heartbeat = flags unknown)
   // Builder (nowplaying-project/docs/builder.md §Wire). All u8, no padding.
   UART_KNOB_GRAB     = 0x06,  // B2->B1 : flags u8 (bit0: 1=grab, 0=release). No ACK.
@@ -52,6 +52,7 @@ enum UartFrameType : uint8_t {
 };
 #define UART_AUDIO_BINS 16
 #define UART_HB_WIFI    0x01
+#define UART_HB_INGEST  0x02   // an /ingest POST is in flight (Board 2 holds its RE-CHECK spinner until it clears)
 #define UART_ACK_OK       0
 #define UART_ACK_REJECTED 1
 
